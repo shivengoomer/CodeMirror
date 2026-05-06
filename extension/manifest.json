@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "CodeMirror",
+  "description": "Tracks failed coding submissions and surfaces recurring mistake patterns.",
+  "version": "0.1.0",
+  "permissions": ["storage", "alarms", "notifications"],
+  "host_permissions": [
+    "https://leetcode.com/*",
+    "https://*.leetcode.com/*",
+    "https://www.geeksforgeeks.org/*",
+    "https://*.geeksforgeeks.org/*",
+    "https://www.hackerrank.com/*",
+    "https://*.hackerrank.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CodeMirror"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.com/*", "https://*.leetcode.com/*"],
+      "js": ["lc-content.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.geeksforgeeks.org/*", "https://*.geeksforgeeks.org/*"],
+      "js": ["gfg-content.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.hackerrank.com/*", "https://*.hackerrank.com/*"],
+      "js": ["hr-content.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8000 https://leetcode.com https://*.leetcode.com https://www.geeksforgeeks.org https://*.geeksforgeeks.org https://www.hackerrank.com https://*.hackerrank.com"
+  }
+}
