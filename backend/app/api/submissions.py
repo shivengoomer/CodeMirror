@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
 from app.core.database import SessionLocal, get_db
+from app.core.rate_limit import submission_rate_limiter
+from app.models.job_error import JobError
 from app.models.enums import Platform, SubmissionTagRole, SubmissionVerdict
 from app.models.pattern import Pattern
 from app.models.revision_queue import RevisionQueueItem
@@ -37,14 +39,18 @@ def _submission_payload(submission: Submission) -> dict[str, object]:
 
 async def run_pattern_aggregation(user_id: UUID) -> None:
     async with SessionLocal() as db:
-        result = await db.execute(
-            select(Submission)
-            .where(Submission.user_id == user_id)
-            .order_by(Submission.submitted_at.desc())
-            .limit(10)
-        )
-        recent_submissions = [_submission_payload(submission) for submission in result.scalars().all()]
-        await groq_service.run_pattern_aggregation({"user_id": str(user_id), "recent_submissions": recent_submissions})
+        try:
+            result = await db.execute(
+                select(Submission)
+                .where(Submission.user_id == user_id)
+                .order_by(Submission.submitted_at.desc())
+                .limit(10)
+            )
+            recent_submissions = [_submission_payload(submission) for submission in result.scalars().all()]
+            await groq_service.run_pattern_aggregation({"user_id": str(user_id), "recent_submissions": recent_submissions})
+        except Exception as exc:
+            db.add(JobError(user_id=user_id, job_name="run_pattern_aggregation", error_message=str(exc)))
+            await db.commit()
 
 
 @router.post("", response_model=SubmissionIngestResponse, status_code=status.HTTP_201_CREATED)
@@ -54,14 +60,30 @@ async def ingest_submission(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SubmissionIngestResponse:
+    submission_rate_limiter.check(current_user.id)
     submitted_at = datetime.fromtimestamp(payload.timestamp / 1000, tz=UTC)
+    five_seconds_before = submitted_at - timedelta(seconds=5)
+    five_seconds_after = submitted_at + timedelta(seconds=5)
+    duplicate_result = await db.execute(
+        select(Submission.id).where(
+            Submission.user_id == current_user.id,
+            Submission.problem_slug == payload.problem_slug,
+            Submission.platform == payload.platform,
+            Submission.submitted_at >= five_seconds_before,
+            Submission.submitted_at <= five_seconds_after,
+        )
+    )
+    if duplicate_result.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate submission detected")
+
+    code_snapshot = payload.code[: 50 * 1024]
     submission = Submission(
         user_id=current_user.id,
         platform=payload.platform,
         problem_slug=payload.problem_slug,
         problem_title=payload.problem_title,
         language=payload.language,
-        code_snapshot=payload.code,
+        code_snapshot=code_snapshot,
         verdict=payload.verdict,
         failing_test_cases=[case.model_dump() for case in payload.failing_test_cases],
         error_message=payload.error_message,

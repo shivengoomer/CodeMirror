@@ -27,7 +27,7 @@ try:
 except ModuleNotFoundError:
     CryptContext = None
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") if CryptContext is not None else None
+pwd_context = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12, deprecated="auto") if CryptContext is not None else None
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
@@ -160,6 +160,26 @@ async def validate_refresh_token(db: AsyncSession, token: str) -> UUID:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
 
     return UUID(payload["sub"])
+
+
+async def rotate_refresh_token(db: AsyncSession, token: str) -> tuple[str, UUID]:
+    settings = get_settings()
+    try:
+        payload = _decode_jwt(token, settings.jwt_refresh_secret)
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token") from exc
+    if payload.get("type") != "refresh" or payload.get("sub") is None or payload.get("jti") is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+    result = await db.execute(select(RefreshToken).where(RefreshToken.token_jti == payload["jti"]))
+    stored_token = result.scalar_one_or_none()
+    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= datetime.now(UTC):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
+
+    stored_token.revoked_at = datetime.now(UTC)
+    user_id = UUID(payload["sub"])
+    new_refresh = await create_refresh_token(db, user_id)
+    return new_refresh, user_id
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> User:

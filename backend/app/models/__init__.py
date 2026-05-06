@@ -1,6 +1,7 @@
 """SQLAlchemy model modules."""
 
 from app.models.enums import PatternImpact, Platform, SubmissionTagRole, SubmissionVerdict
+from app.models.job_error import JobError
 from app.models.pattern import Pattern
 from app.models.refresh_token import RefreshToken
 from app.models.revision_queue import RevisionQueueItem
@@ -13,6 +14,7 @@ __all__ = [
     "Pattern",
     "PatternImpact",
     "Platform",
+    "JobError",
     "RefreshToken",
     "RevisionQueueItem",
     "Submission",

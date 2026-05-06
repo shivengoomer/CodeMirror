@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import create_access_token, create_refresh_token, get_current_user, hash_password, validate_refresh_token, verify_password
+from app.core.auth import create_access_token, create_refresh_token, get_current_user, hash_password, rotate_refresh_token, verify_password
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.auth import AccessTokenResponse, AuthResponse, LoginRequest, RefreshRequest, RegisterRequest
@@ -54,8 +54,9 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
 
 @router.post("/refresh", response_model=AccessTokenResponse)
 async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> AccessTokenResponse:
-    user_id = await validate_refresh_token(db, payload.refresh_token)
-    return AccessTokenResponse(access_token=create_access_token(user_id))
+    new_refresh_token, user_id = await rotate_refresh_token(db, payload.refresh_token)
+    await db.commit()
+    return AccessTokenResponse(access_token=create_access_token(user_id), refresh_token=new_refresh_token)
 
 
 @router.get("/me", response_model=UserResponse)
