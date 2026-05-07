@@ -1,3 +1,9 @@
-#codemirror-overlay {
-  box-sizing: border-box;
+/*
+ * Overlay styles are inlined in overlay.ts for Shadow DOM isolation.
+ * This file is kept as a design reference only.
+ * See: src/overlay/overlay.ts — OVERLAY_CSS constant.
+ */
+#codemirror-overlay-host {
+  /* Host element — no styles needed, Shadow DOM encapsulates everything */
+  all: initial;
 }

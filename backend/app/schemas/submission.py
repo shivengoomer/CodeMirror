@@ -1,66 +1,55 @@
 from datetime import datetime
-from typing import Any
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
-
-from app.models.enums import Platform, SubmissionVerdict
-from app.schemas.common import ORMModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FailingCase(BaseModel):
-    input: Any
-    expected: Any | None = None
-    got: Any | None = None
-
-
-class SubmissionBase(BaseModel):
-    platform: Platform
-    problem_slug: str = Field(max_length=200)
-    problem_title: str = Field(max_length=300)
-    language: str = Field(max_length=50)
-    code_snapshot: str
-    verdict: SubmissionVerdict
-    failing_test_cases: list[FailingCase] = Field(default_factory=list)
-    error_message: str | None = None
-    runtime_ms: int | None = Field(default=None, ge=0)
-    submitted_at: datetime
-
-
-class SubmissionCreate(SubmissionBase):
-    pass
-
-
-class SubmissionUpdate(BaseModel):
-    analysed: bool | None = None
-
-
-class SubmissionResponse(SubmissionBase, ORMModel):
-    id: UUID
-    user_id: UUID
-    analysed: bool
+    input: str
+    expected: str
+    got: str
 
 
 class UnifiedSubmissionIn(BaseModel):
-    platform: Platform
-    problem_slug: str = Field(max_length=200)
-    problem_title: str = Field(max_length=300)
-    language: str = Field(max_length=50)
+    platform: Literal["leetcode", "gfg", "hackerrank"]
+    problem_slug: str
+    problem_title: str
+    language: str
     code: str
-    verdict: SubmissionVerdict
+    verdict: Literal["wrong_answer", "tle", "mle", "runtime_error", "compile_error"]
     failing_test_cases: list[FailingCase] = Field(default_factory=list)
     error_message: str | None = None
-    runtime_ms: int | None = Field(default=None, ge=0)
     timestamp: int
+    leetcode_submission_id: int | None = None
+    leetcode_session: str | None = None
+    leetcode_csrf: str | None = None
+    leetcode_headers: dict[str, str] | None = None
 
 
-class SubmissionIngestResponse(BaseModel):
+class SubmissionOut(BaseModel):
+    id: UUID
+    platform: str
+    problem_slug: str
+    problem_title: str
+    language: str
+    verdict: str
+    submitted_at: datetime
+    analysed: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OverlayData(BaseModel):
+    headline: str
+    body: str
+    call_to_action: str
+    badge_label: str
+    error_types: list[str]
+    concepts: list[str]
+    is_recurring: bool
+
+
+class SubmissionResponse(BaseModel):
     submission_id: UUID
-    overlay_data: dict[str, Any]
-
-
-class SubmissionListResponse(BaseModel):
-    items: list[SubmissionResponse]
-    total: int
-    limit: int
-    offset: int
+    overlay_data: OverlayData

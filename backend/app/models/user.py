@@ -22,7 +22,7 @@ class User(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default=text("gen_random_uuid()"),
+
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)

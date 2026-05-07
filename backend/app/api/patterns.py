@@ -13,7 +13,7 @@ from app.models.submission_tag import SubmissionTag
 from app.models.user import User
 from app.schemas.pattern import PatternCreate, PatternResponse, PatternUpdate
 from app.schemas.pattern_detail import PatternDetailResponse
-from app.schemas.submission import SubmissionResponse
+from app.schemas.submission import SubmissionOut
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
 
@@ -72,7 +72,7 @@ async def get_pattern(
     )
     return PatternDetailResponse(
         pattern=PatternResponse.model_validate(pattern),
-        submissions=[SubmissionResponse.model_validate(submission) for submission in linked.scalars().all()],
+        submissions=[SubmissionOut.model_validate(submission) for submission in linked.scalars().all()],
     )
 
 

@@ -4,21 +4,24 @@ import { build, type BuildOptions } from "esbuild";
 
 const outdir = "dist";
 
-const entryPoints: Record<string, string> = {
-  "background": "src/background/service-worker.ts",
+const contentEntryPoints: Record<string, string> = {
   "lc-content": "src/content/leetcode.ts",
+  "lc-main": "src/content/leetcode-main.ts",
   "gfg-content": "src/content/gfg.ts",
   "hr-content": "src/content/hackerrank.ts",
-  "popup": "src/popup/popup.ts"
+};
+
+const esmEntryPoints: Record<string, string> = {
+  background: "src/background/service-worker.ts",
+  popup: "src/popup/popup.ts",
 };
 
 const sharedOptions: BuildOptions = {
   bundle: true,
-  format: "esm",
   platform: "browser",
   target: "es2022",
   sourcemap: true,
-  minify: false
+  minify: false,
 };
 
 async function copyStaticFile(from: string, to: string): Promise<void> {
@@ -31,20 +34,29 @@ async function main(): Promise<void> {
   await rm(outdir, { recursive: true, force: true });
   await mkdir(outdir, { recursive: true });
 
-  await Promise.all(
-    Object.entries(entryPoints).map(([name, entryPoint]) =>
-      build({
-        ...sharedOptions,
-        entryPoints: [entryPoint],
-        outfile: resolve(outdir, `${name}.js`)
-      })
-    )
+  const contentBuilds = Object.entries(contentEntryPoints).map(([name, entryPoint]) =>
+    build({
+      ...sharedOptions,
+      format: "iife",
+      entryPoints: [entryPoint],
+      outfile: resolve(outdir, `${name}.js`),
+    })
   );
 
+  const esmBuilds = Object.entries(esmEntryPoints).map(([name, entryPoint]) =>
+    build({
+      ...sharedOptions,
+      format: "esm",
+      entryPoints: [entryPoint],
+      outfile: resolve(outdir, `${name}.js`),
+    })
+  );
+
+  await Promise.all([...contentBuilds, ...esmBuilds]);
+
   await Promise.all([
-    copyStaticFile("manifest.json", "manifest.json"),
     copyStaticFile("src/popup/popup.html", "popup.html"),
-    copyStaticFile("src/popup/popup.css", "popup.css")
+    copyStaticFile("src/popup/popup.css", "popup.css"),
   ]);
 }
 

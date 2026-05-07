@@ -1,9 +1,9 @@
 from pydantic import BaseModel
 
 from app.schemas.pattern import PatternResponse
-from app.schemas.submission import SubmissionResponse
+from app.schemas.submission import SubmissionOut
 
 
 class PatternDetailResponse(BaseModel):
     pattern: PatternResponse
-    submissions: list[SubmissionResponse]
+    submissions: list[SubmissionOut]

@@ -5,7 +5,7 @@ from app.schemas.user import UserCreate, UserResponse
 
 class LoginRequest(BaseModel):
     email: str = Field(max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    password: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=8, max_length=255)
 
 
 class RefreshRequest(BaseModel):
@@ -25,3 +25,9 @@ class AuthResponse(AccessTokenResponse):
 
 class RegisterRequest(UserCreate):
     pass
+
+
+class LeetCodeSessionSyncRequest(BaseModel):
+    leetcode_session: str | None = None
+    leetcode_csrf: str | None = None
+    leetcode_headers: dict[str, str] | None = None

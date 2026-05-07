@@ -1,46 +1,24 @@
 {
   "manifest_version": 3,
   "name": "CodeMirror",
-  "description": "Tracks failed coding submissions and surfaces recurring mistake patterns.",
+  "description": "Tracks failed coding submissions and surfaces recurring mistake patterns across LeetCode, GeeksForGeeks, and HackerRank.",
   "version": "0.1.0",
-  "permissions": ["storage", "alarms", "notifications"],
+  "permissions": ["storage", "cookies"],
   "host_permissions": [
     "https://leetcode.com/*",
-    "https://*.leetcode.com/*",
-    "https://www.geeksforgeeks.org/*",
-    "https://*.geeksforgeeks.org/*",
-    "https://www.hackerrank.com/*",
-    "https://*.hackerrank.com/*"
+    "https://*.leetcode.com/*"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "dist/background.js",
     "type": "module"
   },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "CodeMirror"
+    "default_popup": "dist/popup.html",
+    "default_title": "CodeMirror — Mistake Tracker"
   },
-  "content_scripts": [
-    {
-      "matches": ["https://leetcode.com/*", "https://*.leetcode.com/*"],
-      "js": ["lc-content.js"],
-      "all_frames": true,
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["https://www.geeksforgeeks.org/*", "https://*.geeksforgeeks.org/*"],
-      "js": ["gfg-content.js"],
-      "all_frames": true,
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["https://www.hackerrank.com/*", "https://*.hackerrank.com/*"],
-      "js": ["hr-content.js"],
-      "all_frames": true,
-      "run_at": "document_start"
-    }
-  ],
+  "content_scripts": [],
+  "web_accessible_resources": [],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8000 https://leetcode.com https://*.leetcode.com https://www.geeksforgeeks.org https://*.geeksforgeeks.org https://www.hackerrank.com https://*.hackerrank.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8000 https://leetcode.com https://*.leetcode.com"
   }
 }

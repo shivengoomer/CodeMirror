@@ -25,7 +25,7 @@ class Submission(Base):
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-        server_default=text("gen_random_uuid()"),
+
     )
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     platform: Mapped[Platform] = mapped_column(
@@ -40,7 +40,7 @@ class Submission(Base):
         Enum(SubmissionVerdict, name="submission_verdict_enum", values_callable=enum_values),
         nullable=False,
     )
-    failing_test_cases: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    failing_test_cases: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'"))
     error_message: Mapped[str | None] = mapped_column(Text)
     runtime_ms: Mapped[int | None] = mapped_column(Integer)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

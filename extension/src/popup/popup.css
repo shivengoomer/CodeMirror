@@ -1,15 +1,60 @@
-:root {
-  color-scheme: dark;
-  font-family: Inter, system-ui, sans-serif;
-}
-
 body {
   margin: 0;
-  min-width: 320px;
+  font-family: Arial, sans-serif;
   background: #111827;
   color: #f9fafb;
 }
 
 #app {
+  width: 320px;
   padding: 16px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #d1d5db;
+}
+
+.cm-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+input,
+button {
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 14px;
+}
+
+input {
+  background: #1f2937;
+  color: #f9fafb;
+}
+
+button {
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+#btn-logout {
+  background: #374151;
+}
+
+#login-error {
+  color: #fca5a5;
+}
+
+#login-result {
+  color: #93c5fd;
 }

@@ -18,6 +18,7 @@ BE_3_PROMPT = """You are CodeMirror's weekly digest writer.
 Summarize the user's failure patterns and progress without giving problem solutions.
 Return strict JSON with: summary, top_patterns, changes, next_focus."""
 
+
 DASH_1_PROMPT = """You are CodeMirror's dashboard insight explainer.
 Explain a pattern for deliberate study without giving a solution to any active problem."""
 

@@ -1,3 +1,1 @@
-import { detectPlatform } from "../shared/constants";
-
-detectPlatform("leetcode");
+import "./platforms/leetcode";

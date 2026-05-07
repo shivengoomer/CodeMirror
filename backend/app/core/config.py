@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     groq_model: str = "llama-3.3-70b-versatile"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
 
 @lru_cache

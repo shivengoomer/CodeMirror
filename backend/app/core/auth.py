@@ -22,26 +22,19 @@ except ModuleNotFoundError:
     JWTError = ValueError
     jwt = None
 
-try:
-    from passlib.context import CryptContext
-except ModuleNotFoundError:
-    CryptContext = None
+import bcrypt
 
-pwd_context = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12, deprecated="auto") if CryptContext is not None else None
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 def hash_password(password: str) -> str:
-    if pwd_context is not None:
-        return pwd_context.hash(password)
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
-    return f"pbkdf2_sha256${salt}${digest}"
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(password.encode(), salt).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    if pwd_context is not None and not password_hash.startswith("pbkdf2_sha256$"):
-        return pwd_context.verify(password, password_hash)
+    if password_hash.startswith("$2b$") or password_hash.startswith("$2a$"):
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
     try:
         _, salt, digest = password_hash.split("$", 2)
     except ValueError:
@@ -180,6 +173,21 @@ async def rotate_refresh_token(db: AsyncSession, token: str) -> tuple[str, UUID]
     user_id = UUID(payload["sub"])
     new_refresh = await create_refresh_token(db, user_id)
     return new_refresh, user_id
+
+
+async def revoke_refresh_token(db: AsyncSession, token: str) -> None:
+    settings = get_settings()
+    try:
+        payload = _decode_jwt(token, settings.jwt_refresh_secret)
+    except Exception:
+        return
+    token_jti = payload.get("jti")
+    if not token_jti:
+        return
+    result = await db.execute(select(RefreshToken).where(RefreshToken.token_jti == token_jti))
+    stored_token = result.scalar_one_or_none()
+    if stored_token is not None and stored_token.revoked_at is None:
+        stored_token.revoked_at = datetime.now(UTC)
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> User:

@@ -1,3 +1,8 @@
 export default function HomePage() {
-  return <main>CodeMirror Dashboard</main>;
+  return (
+    <div>
+      Code Mirror DashBoard
+      <div >  work in progress </div>
+    </div>
+  )
 }
