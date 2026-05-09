@@ -1,4 +1,5 @@
 import logging
+from inspect import isawaitable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,8 +39,8 @@ app.include_router(notifications.router)
 @app.get("/health")
 async def health() -> dict[str, object]:
     db_ok = await check_database_connection()
-
-    groq = await groq_service.healthcheck()
+    groq_health = groq_service.healthcheck()
+    groq = await groq_health if isawaitable(groq_health) else groq_health
     return {
         "status": "ok" if db_ok and groq.get("status") in {"ok", "disabled"} else "degraded",
         "database": {"status": "ok" if db_ok else "error", "detail": None if db_ok else "database unreachable"},

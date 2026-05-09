@@ -53,3 +53,18 @@ class OverlayData(BaseModel):
 class SubmissionResponse(BaseModel):
     submission_id: UUID
     overlay_data: OverlayData
+
+
+class SubmissionListResponse(BaseModel):
+    items: list[SubmissionOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class LatestLeetCodeAnalyzeResponse(BaseModel):
+    status: str
+    submission_id: UUID | None = None
+    problem_slug: str | None = None
+    verdict: str | None = None
+    overlay_data: OverlayData | None = None

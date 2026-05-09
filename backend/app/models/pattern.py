@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy import JSON, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,7 +29,10 @@ class Pattern(Base):
     tag: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     insight: Mapped[str] = mapped_column(Text, nullable=False)
-    concept_cluster: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    concept_cluster: Mapped[list[str]] = mapped_column(
+        ARRAY(String).with_variant(JSON(), "sqlite"),
+        nullable=False,
+    )
     occurrence_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     impact: Mapped[PatternImpact] = mapped_column(

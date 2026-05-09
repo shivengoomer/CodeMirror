@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.leetcode_session import LeetCodeSession
     from app.models.pattern import Pattern
     from app.models.revision_queue import RevisionQueueItem
     from app.models.submission import Submission
@@ -41,3 +42,8 @@ class User(Base):
         cascade="all, delete-orphan",
     )
     weekly_digests: Mapped[list["WeeklyDigest"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    leetcode_session_data: Mapped["LeetCodeSession | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )

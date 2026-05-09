@@ -10,22 +10,33 @@ from sqlalchemy.orm import selectinload
 from app.core.auth import get_current_user
 from app.core.database import SessionLocal, get_db
 from app.models.enums import Platform, SubmissionTagRole
+from app.models.leetcode_session import LeetCodeSession
 from app.models.pattern import Pattern
 from app.models.revision_queue import RevisionQueueItem
 from app.models.submission import Submission
 from app.models.submission_tag import SubmissionTag
 from app.models.user import User
 from app.schemas.submission import (
+    LatestLeetCodeAnalyzeResponse,
     OverlayData,
+    SubmissionListResponse,
     SubmissionOut,
     SubmissionResponse,
     UnifiedSubmissionIn,
 )
 from app.services.groq_service import groq_service
-from app.services.leetcode_service import get_problem_metadata, get_submission_detail
+from app.services.leetcode_service import get_problem_metadata, get_recent_submissions, get_submission_detail
 
 logger = logging.getLogger("codemirror-api")
 router = APIRouter(tags=["submissions"])
+
+LEETCODE_STATUS_TO_VERDICT: dict[str, str] = {
+    "wrong answer": "wrong_answer",
+    "time limit exceeded": "tle",
+    "memory limit exceeded": "mle",
+    "runtime error": "runtime_error",
+    "compile error": "compile_error",
+}
 
 
 async def run_pattern_aggregation(user_id: UUID, db: AsyncSession) -> None:
@@ -144,7 +155,7 @@ async def run_pattern_aggregation_task(user_id: UUID) -> None:
         logger.exception("pattern_aggregation_task_failed", extra={"user_id": str(user_id)})
 
 
-@router.post("/submissions", response_model=SubmissionResponse)
+@router.post("/submissions", response_model=SubmissionResponse, status_code=status.HTTP_201_CREATED)
 async def create_submission(
     body: UnifiedSubmissionIn,
     background_tasks: BackgroundTasks,
@@ -282,7 +293,102 @@ async def create_submission(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 
-@router.get("/submissions", response_model=list[SubmissionOut])
+@router.post("/submissions/leetcode/latest/analyze", response_model=LatestLeetCodeAnalyzeResponse)
+async def analyze_latest_leetcode_submission(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LatestLeetCodeAnalyzeResponse:
+    if not current_user.leetcode_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LeetCode username is required on user profile.",
+        )
+
+    session_result = await db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == current_user.id))
+    session_row = session_result.scalar_one_or_none()
+    if session_row is None or not session_row.leetcode_session or not session_row.leetcode_csrf:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LeetCode session is missing. Re-sync from extension login.",
+        )
+
+    recent = await get_recent_submissions(
+        username=current_user.leetcode_username,
+        session=session_row.leetcode_session,
+        csrf=session_row.leetcode_csrf,
+        limit=20,
+    )
+    if not recent:
+        return LatestLeetCodeAnalyzeResponse(status="no_recent_submissions")
+
+    latest_failed = next(
+        (
+            item
+            for item in recent
+            if str(item.get("statusDisplay", "")).strip().lower() not in {"accepted"}
+        ),
+        None,
+    )
+    if latest_failed is None:
+        return LatestLeetCodeAnalyzeResponse(status="no_failed_submission_found")
+
+    raw_status = str(latest_failed.get("statusDisplay", "")).strip().lower()
+    verdict = LEETCODE_STATUS_TO_VERDICT.get(raw_status)
+    if verdict is None:
+        return LatestLeetCodeAnalyzeResponse(status="unsupported_verdict", verdict=raw_status)
+
+    raw_submission_id = latest_failed.get("id")
+    try:
+        lc_submission_id = int(str(raw_submission_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid LeetCode submission id.")
+
+    submitted_ts_raw = str(latest_failed.get("timestamp", "0")).strip()
+    try:
+        ts_num = int(submitted_ts_raw)
+        timestamp_ms = ts_num * 1000 if ts_num < 10_000_000_000 else ts_num
+    except ValueError:
+        timestamp_ms = int(datetime.now(UTC).timestamp() * 1000)
+
+    detail = await get_submission_detail(lc_submission_id, session_row.leetcode_session, session_row.leetcode_csrf)
+    question = detail.get("question", {}) if isinstance(detail.get("question"), dict) else {}
+    question_title = str(question.get("title") or latest_failed.get("title") or "Unknown Problem")
+    question_slug = str(question.get("titleSlug") or latest_failed.get("titleSlug") or "")
+    lang = str(detail.get("lang") or latest_failed.get("lang") or "unknown")
+    code = str(detail.get("code") or "")
+    error_message = str(detail.get("statusDisplay") or latest_failed.get("statusDisplay") or "")
+
+    payload = UnifiedSubmissionIn(
+        platform="leetcode",
+        problem_slug=question_slug,
+        problem_title=question_title,
+        language=lang,
+        code=code,
+        verdict=verdict,
+        failing_test_cases=[],
+        error_message=error_message or None,
+        timestamp=timestamp_ms,
+        leetcode_submission_id=lc_submission_id,
+        leetcode_session=session_row.leetcode_session,
+        leetcode_csrf=session_row.leetcode_csrf,
+        leetcode_headers=session_row.leetcode_headers or None,
+    )
+    response = await create_submission(
+        body=payload,
+        background_tasks=BackgroundTasks(),
+        current_user=current_user,
+        db=db,
+    )
+    return LatestLeetCodeAnalyzeResponse(
+        status="processed",
+        submission_id=response.submission_id,
+        problem_slug=question_slug,
+        verdict=verdict,
+        overlay_data=response.overlay_data,
+    )
+
+
+@router.get("/submissions", response_model=SubmissionListResponse)
 async def list_submissions(
     platform: Platform | None = Query(None),
     verdict: str | None = Query(None),
@@ -290,16 +396,22 @@ async def list_submissions(
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[SubmissionOut]:
+) -> SubmissionListResponse:
     try:
-        stmt = select(Submission).where(Submission.user_id == current_user.id)
+        base_stmt = select(Submission).where(Submission.user_id == current_user.id)
         if platform is not None:
-            stmt = stmt.where(Submission.platform == platform)
+            base_stmt = base_stmt.where(Submission.platform == platform)
         if verdict is not None:
-            stmt = stmt.where(Submission.verdict == verdict)
-        stmt = stmt.order_by(Submission.submitted_at.desc()).limit(limit).offset(offset)
+            base_stmt = base_stmt.where(Submission.verdict == verdict)
+
+        total_stmt = select(func.count()).select_from(base_stmt.subquery())
+        total_result = await db.execute(total_stmt)
+        total = int(total_result.scalar() or 0)
+
+        stmt = base_stmt.order_by(Submission.submitted_at.desc()).limit(limit).offset(offset)
         result = await db.execute(stmt)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        return SubmissionListResponse(items=items, total=total, limit=limit, offset=offset)
     except Exception:
         logger.exception("list_submissions_failed", extra={"user_id": str(current_user.id)})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")

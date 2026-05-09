@@ -3,7 +3,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_pattern_crud(client):
-    headers = await (await __import__('tests.conftest', fromlist=['']).conftest.auth_header_for)(client)
+    from tests.conftest import auth_header_for
+    headers = await auth_header_for(client)
 
     payload = {
         "tag": "off-by-one",

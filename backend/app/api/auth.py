@@ -16,6 +16,7 @@ from app.core.auth import (
     verify_password,
 )
 from app.core.database import get_db
+from app.models.leetcode_session import LeetCodeSession
 from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
@@ -26,6 +27,7 @@ from app.schemas.auth import (
     RegisterRequest,
 )
 from app.schemas.user import UserResponse
+from app.schemas.user import UserUpdate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -143,6 +145,27 @@ async def me(
     return UserResponse.model_validate(current_user)
 
 
+@router.patch("/me", response_model=UserResponse)
+async def update_me(
+    payload: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    if payload.leetcode_username is not None:
+        current_user.leetcode_username = payload.leetcode_username or None
+    if payload.gfg_username is not None:
+        current_user.gfg_username = payload.gfg_username or None
+    if payload.hackerrank_username is not None:
+        current_user.hackerrank_username = payload.hackerrank_username or None
+    if payload.timezone is not None:
+        current_user.timezone = payload.timezone
+    if payload.available_minutes_per_day is not None:
+        current_user.available_minutes_per_day = payload.available_minutes_per_day
+    await db.commit()
+    await db.refresh(current_user)
+    return UserResponse.model_validate(current_user)
+
+
 @router.post("/logout")
 async def logout(
     payload: RefreshRequest,
@@ -157,8 +180,20 @@ async def logout(
 async def sync_leetcode_session(
     payload: LeetCodeSessionSyncRequest,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     headers = payload.leetcode_headers or {}
+    row_result = await db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == current_user.id))
+    row = row_result.scalar_one_or_none()
+    if row is None:
+        row = LeetCodeSession(user_id=current_user.id)
+        db.add(row)
+
+    row.leetcode_session = payload.leetcode_session
+    row.leetcode_csrf = payload.leetcode_csrf
+    row.leetcode_headers = headers
+    row.updated_at = datetime.now(UTC)
+    await db.commit()
 
     cookie_header = headers.get("Cookie", "")
 

@@ -180,6 +180,20 @@ class GroqService:
                 },
             }
 
+    async def detect_recurrence(
+        self, payload: dict[str, Any], known_patterns: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        """Backward-compatible alias used by older tests/routes."""
+        result = await self.run_ext1(payload, known_patterns or [])
+        return {
+            "is_recurring": bool(result.get("is_recurring", False)),
+            "matched_pattern_ids": result.get("matched_pattern_ids", []),
+            "role_by_pattern_id": result.get("role_by_pattern_id", {}),
+            "overlay": result.get("overlay", {}),
+            "error_types": result.get("error_types", []),
+            "concepts": result.get("concepts", []),
+        }
+
     async def run_be1(self, submissions: list[dict[str, Any]], existing_patterns: list[dict[str, Any]]) -> dict[str, Any]:
         try:
             return await self._complete_json(
@@ -192,6 +206,16 @@ class GroqService:
             )
         except Exception:
             return {"patterns": [], "noise": [], "summary": ""}
+
+    async def run_pattern_aggregation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Backward-compatible alias used by older tests/routes."""
+        submissions = payload.get("submissions", [])
+        existing_patterns = payload.get("existing_patterns", [])
+        if not isinstance(submissions, list):
+            submissions = []
+        if not isinstance(existing_patterns, list):
+            existing_patterns = []
+        return await self.run_be1(submissions, existing_patterns)
 
     async def plan_revision_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:

@@ -2,6 +2,7 @@
 
 from app.models.enums import PatternImpact, Platform, SubmissionTagRole, SubmissionVerdict
 from app.models.job_error import JobError
+from app.models.leetcode_session import LeetCodeSession
 from app.models.pattern import Pattern
 from app.models.refresh_token import RefreshToken
 from app.models.revision_queue import RevisionQueueItem
@@ -15,6 +16,7 @@ __all__ = [
     "PatternImpact",
     "Platform",
     "JobError",
+    "LeetCodeSession",
     "RefreshToken",
     "RevisionQueueItem",
     "Submission",

@@ -6,6 +6,57 @@
 
 ---
 
+## IMPORTANT UPDATE (May 7, 2026) — START FROM THIS BASELINE
+
+Current repo baseline is intentionally simplified on extension side:
+- Extension handles login + persistent token state + LeetCode cookie fetch.
+- Backend exposes `/auth/leetcode-session` and validates cookie/header receipt.
+- Dashboard exists but full “sync latest submission from backend and analyze” loop must be completed.
+
+To make the full product workable quickly, use this strict implementation order:
+
+1. Persist LeetCode session data per user
+2. Build backend “latest submission analyze” route
+3. Connect dashboard buttons and views to this route
+4. Add background reliability and weekly aggregation
+5. Reintroduce richer extension behavior only after backend+dashboard loop is stable
+
+Do not start by rebuilding complex content-script capture. The shortest stable path is backend-driven sync with dashboard as control plane.
+
+### Required New Routes
+
+- `POST /auth/leetcode-session`
+  - input: `leetcode_session`, `leetcode_csrf`, `leetcode_headers`
+  - behavior: validate and persist per user
+  - output: receipt + status
+
+- `POST /submissions/leetcode/latest/analyze`
+  - behavior:
+    - read saved LeetCode auth for current user
+    - query `recentSubmissionList`
+    - pick latest failed submission
+    - query `submissionDetails`
+    - normalize and store submission
+    - run pattern analysis
+  - output: `{ status, submission_id, analysis_summary }`
+
+### Required Dashboard Actions
+
+- “Sync and analyze latest LeetCode submission”
+- Show sync status:
+  - auth available/missing/expired
+  - last sync timestamp
+  - last analyzed submission
+
+### Acceptance Criteria for “Workable”
+
+- User logs in once in extension and remains logged in.
+- Backend stores cookie session details successfully.
+- Dashboard can trigger latest-submission analyze and render output.
+- New analyzed submission appears in dashboard list and pattern widgets.
+
+---
+
 ## CONTEXT (read before every phase)
 
 You are building a browser extension + web dashboard called **CodeMirror** — a multi-platform coding mistake tracker and pattern recognition system.

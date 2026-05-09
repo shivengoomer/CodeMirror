@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import time
 import uuid
 
@@ -20,6 +21,9 @@ from app.main import app
 from app.core.database import Base, get_db
 from app.services import groq_service
 from app.core import rate_limit
+
+# Compatibility alias for tests that import `tests.conftest` then access `.conftest`.
+conftest = sys.modules[__name__]
 
 
 @pytest.fixture(scope="session")
