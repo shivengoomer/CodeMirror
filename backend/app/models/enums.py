@@ -15,6 +15,7 @@ class Platform(StrEnum):
 
 
 class SubmissionVerdict(StrEnum):
+    ACCEPTED = "accepted"
     WRONG_ANSWER = "wrong_answer"
     TLE = "tle"
     MLE = "mle"

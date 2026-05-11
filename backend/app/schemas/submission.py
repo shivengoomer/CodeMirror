@@ -17,7 +17,7 @@ class UnifiedSubmissionIn(BaseModel):
     problem_title: str
     language: str
     code: str
-    verdict: Literal["wrong_answer", "tle", "mle", "runtime_error", "compile_error"]
+    verdict: Literal["accepted", "wrong_answer", "tle", "mle", "runtime_error", "compile_error"]
     failing_test_cases: list[FailingCase] = Field(default_factory=list)
     error_message: str | None = None
     timestamp: int
@@ -25,6 +25,18 @@ class UnifiedSubmissionIn(BaseModel):
     leetcode_session: str | None = None
     leetcode_csrf: str | None = None
     leetcode_headers: dict[str, str] | None = None
+
+
+class AIAnalysis(BaseModel):
+    root_cause: str
+    failure_category: str
+    what_they_thought: str
+    what_is_actually_true: str
+    code_evidence: str
+    fix_direction: str
+    pattern_signal: str | None = None
+    severity: Literal["habit", "gap", "slip"]
+    repair_exercise: str
 
 
 class SubmissionOut(BaseModel):
@@ -36,6 +48,7 @@ class SubmissionOut(BaseModel):
     verdict: str
     submitted_at: datetime
     analysed: bool
+    ai_analysis: AIAnalysis | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -48,6 +61,7 @@ class OverlayData(BaseModel):
     error_types: list[str]
     concepts: list[str]
     is_recurring: bool
+    ai_analysis: AIAnalysis | None = None
 
 
 class SubmissionResponse(BaseModel):
@@ -68,3 +82,9 @@ class LatestLeetCodeAnalyzeResponse(BaseModel):
     problem_slug: str | None = None
     verdict: str | None = None
     overlay_data: OverlayData | None = None
+
+class SubmissionStats(BaseModel):
+    weekly_total: int
+    weekly_failed: int
+    weekly_accepted: int
+    failure_rate: float

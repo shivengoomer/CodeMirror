@@ -24,12 +24,7 @@ except ModuleNotFoundError:
 
 import bcrypt
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
-
-
-def _utc_now_naive() -> datetime:
-    """Use naive UTC for DB values that may come back without tzinfo (e.g., sqlite tests)."""
-    return datetime.now(UTC).replace(tzinfo=None)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/swagger-login")
 
 
 def hash_password(password: str) -> str:
@@ -154,7 +149,7 @@ async def validate_refresh_token(db: AsyncSession, token: str) -> UUID:
 
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_jti == payload["jti"]))
     stored_token = result.scalar_one_or_none()
-    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= _utc_now_naive():
+    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
 
     return UUID(payload["sub"])
@@ -171,10 +166,11 @@ async def rotate_refresh_token(db: AsyncSession, token: str) -> tuple[str, UUID]
 
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_jti == payload["jti"]))
     stored_token = result.scalar_one_or_none()
-    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= _utc_now_naive():
+    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
 
     stored_token.revoked_at = datetime.now(UTC)
+
     user_id = UUID(payload["sub"])
     new_refresh = await create_refresh_token(db, user_id)
     return new_refresh, user_id

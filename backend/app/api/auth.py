@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 import logging
 
 logger = logging.getLogger(__name__)
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,8 @@ from app.schemas.auth import (
 )
 from app.schemas.user import UserResponse
 from app.schemas.user import UserUpdate
+from app.services.onboarding import OnboardingService
+from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -82,20 +84,24 @@ async def register(
     )
 
 
+from fastapi import Form
+
 @router.post("/login", response_model=AuthResponse)
 async def login(
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AuthResponse:
+    email = payload.email
+    pass_str = payload.password
 
     result = await db.execute(
-        select(User).where(User.email == payload.email.lower())
+        select(User).where(User.email == email.lower())
     )
 
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(
-        payload.password,
+        pass_str,
         user.password_hash,
     ):
         raise HTTPException(
@@ -115,6 +121,44 @@ async def login(
         access_token=access_token,
         refresh_token=refresh_token,
         user=UserResponse.model_validate(user),
+    )
+
+
+@router.post("/swagger-login", response_model=AccessTokenResponse, include_in_schema=False)
+async def swagger_login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> AccessTokenResponse:
+    email = form_data.username
+    pass_str = form_data.password
+
+    result = await db.execute(
+        select(User).where(User.email == email.lower())
+    )
+
+    user = result.scalar_one_or_none()
+
+    if not user or not verify_password(
+        pass_str,
+        user.password_hash,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    user.last_active = datetime.now(UTC)
+
+    access_token = create_access_token(user.id)
+    refresh_token = await create_refresh_token(db, user.id)
+
+    await db.commit()
+    await db.refresh(user)
+
+    return AccessTokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer"
     )
 
 
@@ -179,6 +223,7 @@ async def logout(
 @router.post("/leetcode-session")
 async def sync_leetcode_session(
     payload: LeetCodeSessionSyncRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
@@ -194,6 +239,15 @@ async def sync_leetcode_session(
     row.leetcode_headers = headers
     row.updated_at = datetime.now(UTC)
     await db.commit()
+
+    if not current_user.onboarding_complete:
+        onboarding_service = OnboardingService(db)
+        background_tasks.add_task(
+            onboarding_service.start_onboarding, 
+            current_user.id, 
+            payload.leetcode_session, 
+            payload.leetcode_csrf
+        )
 
     cookie_header = headers.get("Cookie", "")
 

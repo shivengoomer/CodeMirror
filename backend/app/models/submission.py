@@ -45,6 +45,7 @@ class Submission(Base):
     runtime_ms: Mapped[int | None] = mapped_column(Integer)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     analysed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    ai_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="submissions")
     submission_tags: Mapped[list["SubmissionTag"]] = relationship(back_populates="submission", cascade="all, delete-orphan")
