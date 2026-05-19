@@ -1,3 +1,9 @@
+"""
+CodeMirror — Enum Definitions
+===============================
+All application-wide enumerations.
+"""
+
 from enum import StrEnum
 from typing import TypeVar
 
@@ -33,3 +39,64 @@ class PatternImpact(StrEnum):
 class SubmissionTagRole(StrEnum):
     PRIMARY = "primary"
     CONTRIBUTING = "contributing"
+
+
+class SyncStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class SyncJobType(StrEnum):
+    INITIAL_SYNC = "initial_sync"
+    INCREMENTAL_SYNC = "incremental_sync"
+
+
+class QueueType(StrEnum):
+    WEAK_TOPIC = "weak_topic"
+    FORGOTTEN = "forgotten"
+    MISTAKE_PATTERN = "mistake_pattern"
+    INTERVIEW_PREP = "interview_prep"
+
+
+class RevisionStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+
+
+class PatternCategory(StrEnum):
+    LOGICAL = "logical"
+    SYNTACTICAL = "syntactical"
+    ALGORITHMIC = "algorithmic"
+
+
+class PatternSeverity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class CeleryTaskStatus(StrEnum):
+    PENDING = "pending"
+    STARTED = "started"
+    SUCCESS = "success"
+    FAILURE = "failure"
+    RETRY = "retry"
+
+
+class RoadmapStatus(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+
+
+class PeriodType(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    ALL_TIME = "all_time"

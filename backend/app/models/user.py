@@ -33,8 +33,10 @@ class User(Base):
     timezone: Mapped[str] = mapped_column(String(50), nullable=False, server_default="UTC")
     available_minutes_per_day: Mapped[int | None] = mapped_column(Integer)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, server_default=text("false"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"), nullable=False, deferred=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_active: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), deferred=True)
 
     submissions: Mapped[list["Submission"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     patterns: Mapped[list["Pattern"]] = relationship(back_populates="user", cascade="all, delete-orphan")
