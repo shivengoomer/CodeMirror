@@ -178,3 +178,80 @@ async def get_synced_problems(
                 "lang": sub.get("lang")
             })
     return {"problems": problems}
+
+
+from pydantic import BaseModel
+from typing import List, Optional, Any
+from datetime import datetime, UTC
+from app.models.submission import Submission
+from app.models.enums import Platform
+from app.events import SUBMISSION_CREATED
+from app.events.event_bus import EventBus
+from app.services.sync_service import LEETCODE_STATUS_TO_VERDICT
+
+class ExtensionSubmission(BaseModel):
+    id: Optional[Any] = None
+    title: Optional[str] = None
+    title_slug: Optional[str] = None
+    lang: Optional[str] = None
+    status_display: Optional[str] = None
+    runtime: Optional[str] = None
+    memory: Optional[str] = None
+    timestamp: Optional[Any] = None
+    code: Optional[str] = None
+
+class ExtensionSyncPayload(BaseModel):
+    submissions: List[ExtensionSubmission]
+
+@router.post("/extension")
+async def sync_from_extension(
+    payload: ExtensionSyncPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    event_bus = EventBus(db)
+    count = 0
+    
+    for sub in payload.submissions:
+        raw_status = str(sub.status_display or "").strip().lower()
+        verdict = LEETCODE_STATUS_TO_VERDICT.get(raw_status, "wrong_answer")
+        
+        try:
+            ts = int(str(sub.timestamp or "0"))
+            submitted_at = datetime.fromtimestamp(ts if ts < 10_000_000_000 else ts / 1000, tz=UTC)
+        except (ValueError, TypeError):
+            submitted_at = datetime.now(UTC)
+            
+        slug = sub.title_slug or "unknown"
+        
+        existing = await db.execute(
+            select(Submission).where(
+                Submission.user_id == current_user.id,
+                Submission.problem_slug == slug,
+                Submission.submitted_at == submitted_at,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue
+            
+        submission = Submission(
+            user_id=current_user.id,
+            platform=Platform.LEETCODE,
+            problem_slug=slug,
+            problem_title=sub.title or slug,
+            language=sub.lang or "unknown",
+            code_snapshot=sub.code or "",
+            verdict=verdict,
+            submitted_at=submitted_at,
+            analysed=False,
+        )
+        db.add(submission)
+        await db.flush()
+        
+        await event_bus.emit(SUBMISSION_CREATED, "submission", submission.id, current_user.id)
+        count += 1
+        
+    current_user.onboarding_complete = True
+    await db.commit()
+    
+    return {"status": "ok", "synced_count": count}

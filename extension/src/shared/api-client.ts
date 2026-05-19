@@ -157,6 +157,14 @@ export class ApiClient {
     );
   }
 
+  async syncExtension(payload: { submissions: any[] }): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      "POST",
+      "/sync/extension",
+      payload
+    );
+  }
+
   // ── Submissions ───────────────────────────────────────────────────
 
   async submitFailure(

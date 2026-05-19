@@ -39,20 +39,24 @@ class LeetCodeClient:
         self.session_cookie = session_cookie
         self.csrf_token = csrf_token or ""
         captured_headers = headers or {}
-        captured_cookie = captured_headers.get("Cookie") or captured_headers.get("cookie")
-        cookie = captured_cookie or f"LEETCODE_SESSION={session_cookie}; csrftoken={self.csrf_token}"
+        
+        self.cookies = {}
+        if session_cookie:
+            self.cookies["LEETCODE_SESSION"] = session_cookie
+        if self.csrf_token:
+            self.cookies["csrftoken"] = self.csrf_token
+
         self.headers = {
             "Content-Type": "application/json",
             "Referer": "https://leetcode.com/submissions/",
             "Origin": "https://leetcode.com",
             "User-Agent": captured_headers.get("User-Agent")
             or captured_headers.get("user-agent")
-            or "Mozilla/5.0",
-            "Cookie": cookie,
+            or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "x-csrftoken": self.csrf_token,
         }
         for key, value in captured_headers.items():
-            if key.lower() in {"cookie", "user-agent", "referer", "x-csrftoken"} and value:
+            if key.lower() in {"user-agent", "referer", "x-csrftoken"} and value:
                 self.headers[key] = value
         if not self.headers.get("x-csrftoken") and self.headers.get("X-CSRFToken"):
             self.headers["x-csrftoken"] = self.headers["X-CSRFToken"]
@@ -78,7 +82,7 @@ class LeetCodeClient:
         )
 
     async def _post(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, cookies=self.cookies) as client:
             response = await client.post(
                 LEETCODE_GRAPHQL_URL,
                 json={"query": query, "variables": variables or {}},
@@ -95,7 +99,7 @@ class LeetCodeClient:
             return payload
 
     async def _get(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False, cookies=self.cookies) as client:
             response = await client.get(url, params=params or {}, headers=self.headers)
             if response.status_code >= 400:
                 body = response.text[:500]

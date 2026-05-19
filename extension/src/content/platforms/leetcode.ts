@@ -67,7 +67,94 @@ function listenForSubmissions(): void {
 
 }
 
+async function fetchAllSubmissions() {
+  const allSubmissions = [];
+  let offset = 0;
+  let hasNext = true;
+  let lastKey = "";
+  
+  while (hasNext) {
+    const url = `https://leetcode.com/api/submissions/?offset=${offset}&limit=20&lastkey=${lastKey}`;
+    try {
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      
+      const subs = data.submissions_dump || [];
+      allSubmissions.push(...subs);
+      
+      hasNext = data.has_next;
+      lastKey = data.last_key || "";
+      offset += 20;
+      
+      updateSyncButton(`Syncing... ${allSubmissions.length} submissions fetched`);
+    } catch (e) {
+      console.error(e);
+      updateSyncButton("Sync failed!");
+      return;
+    }
+  }
+  
+  updateSyncButton(`Sending ${allSubmissions.length} to backend...`);
+  
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "SYNC_SUBMISSIONS",
+      payload: allSubmissions
+    });
+    
+    if (response?.success) {
+      updateSyncButton(`Done! ${allSubmissions.length} submissions synced`);
+    } else {
+      updateSyncButton("Backend sync failed!");
+    }
+  } catch (e) {
+    console.error(e);
+    updateSyncButton("Backend sync failed!");
+  }
+}
+
+function updateSyncButton(text: string) {
+  const btn = document.getElementById("codemirror-sync-btn");
+  if (btn) btn.textContent = text;
+}
+
+function injectSyncButton() {
+  if (document.getElementById("codemirror-sync-btn")) return;
+  
+  const btn = document.createElement("button");
+  btn.id = "codemirror-sync-btn";
+  btn.textContent = "Sync LeetCode Submissions";
+  btn.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 999999;
+    background: #0ea5e9;
+    color: white;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  `;
+  
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    fetchAllSubmissions().finally(() => {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = "Sync LeetCode Submissions";
+      }, 5000);
+    });
+  });
+  
+  document.body.appendChild(btn);
+}
+
 function init(): void {
+  injectSyncButton();
   if (!isOnProblemPage()) return;
   injectMainWorldScript();
   listenForSubmissions();

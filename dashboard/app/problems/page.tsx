@@ -15,7 +15,7 @@ export default function ProblemsPage() {
   const problems = data?.problems || [];
 
   return (
-    <div className="max-w-5xl mx-auto flex flex-col gap-10">
+    <div className="w-full flex flex-col gap-10">
       <div className="flex items-end justify-between">
         <div className="flex flex-col gap-1">
           <h1 className="text-3xl font-medium tracking-tight bg-gradient-to-r from-foreground to-foreground/50 bg-clip-text text-transparent">
@@ -25,13 +25,13 @@ export default function ProblemsPage() {
             Synchronized repository of resolved challenges
           </p>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/20 group-focus-within:text-accent transition-colors" size={16} />
-            <input 
-              type="text" 
-              placeholder="Filter by title..." 
+            <input
+              type="text"
+              placeholder="Filter by title..."
               className="bg-white/[0.03] border border-white/5 rounded-xl py-2 pl-10 pr-4 text-sm focus:outline-none focus:border-accent/30 transition-all w-64 font-sans placeholder:text-foreground/20"
             />
           </div>
@@ -60,13 +60,13 @@ export default function ProblemsPage() {
       {problems.length === 0 ? (
         !isLoading && (
           <PremiumCard className="flex items-center justify-center py-20 border-dashed border-2 border-white/5 bg-transparent">
-             <div className="flex flex-col items-center gap-4 text-center">
-               <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-foreground/20">
-                 <FileText size={24} />
-               </div>
-               <p className="text-foreground/60 font-medium">Index is empty</p>
-               <p className="text-foreground/30 text-xs font-mono">Trigger a system sync to populate the repository.</p>
-             </div>
+            <div className="flex flex-col items-center gap-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-foreground/20">
+                <FileText size={24} />
+              </div>
+              <p className="text-foreground/60 font-medium">Index is empty</p>
+              <p className="text-foreground/30 text-xs font-mono">Trigger a system sync to populate the repository.</p>
+            </div>
           </PremiumCard>
         )
       ) : (

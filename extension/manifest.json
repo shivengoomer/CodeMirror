@@ -16,9 +16,30 @@
     "default_popup": "dist/popup.html",
     "default_title": "CodeMirror — Mistake Tracker"
   },
-  "content_scripts": [],
-  "web_accessible_resources": [],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://leetcode.com/*"
+      ],
+      "js": [
+        "dist/lc-content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dist/lc-main.js",
+        "dist/popup.html",
+        "dist/popup.css"
+      ],
+      "matches": [
+        "https://leetcode.com/*"
+      ]
+    }
+  ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8000 https://leetcode.com https://*.leetcode.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:8000 http://localhost:3000 https://leetcode.com https://*.leetcode.com"
   }
 }

@@ -39,8 +39,19 @@ async function handleMessage(msg: ExtensionMessage): Promise<MessageResponse> {
       await clearAuthTokens();
       await clearUserProfile();
       return { success: true };
+    case "SYNC_SUBMISSIONS":
+      return handleSyncSubmissions((msg as any).payload);
     default:
       return { success: false, error: "Unsupported message type" };
+  }
+}
+
+async function handleSyncSubmissions(submissions: any[]): Promise<MessageResponse> {
+  try {
+    const res = await apiClient.syncExtension({ submissions });
+    return { success: true, data: res };
+  } catch (err) {
+    return { success: false, error: String(err) };
   }
 }
 

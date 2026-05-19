@@ -98,28 +98,37 @@ class SyncService:
             all_submissions = []
             offset = 0
             last_key = None
-            while True:
-                try:
+            
+            # Try REST API first
+            try:
+                while True:
                     data = await client.get_authenticated_submissions(offset=offset, limit=50, last_key=last_key)
-                except RuntimeError as exc:
-                    if "LeetCode HTTP 403" not in str(exc):
-                        raise
-                    raise RuntimeError(
-                        "LeetCode rejected the captured session while fetching submissions. "
-                        "Open leetcode.com in the same browser, confirm you are logged in, "
-                        "then click the CodeMirror extension again and retry sync."
-                    ) from exc
-                batch = data.get("submissions", [])
-                all_submissions.extend(batch)
-                if not data.get("hasNext"):
-                    break
-                last_key = data.get("lastKey")
-                if last_key:
+                    batch = data.get("submissions", [])
+                    all_submissions.extend(batch)
+                    if not data.get("hasNext"):
+                        break
+                    last_key = data.get("lastKey")
+                    if last_key:
+                        offset = 0
+                    else:
+                        offset += 50
+                    if not batch:
+                        break
+            except RuntimeError as exc:
+                if "LeetCode HTTP 401" in str(exc) or "LeetCode HTTP 403" in str(exc):
+                    logger.warning("REST API failed, falling back to GraphQL accepted submissions", exc_info=True)
+                    # Fallback to GraphQL
+                    all_submissions = []
                     offset = 0
+                    while True:
+                        data = await client.get_all_accepted_submissions(user.leetcode_username, offset=offset, limit=50)
+                        batch = data.get("submissions", [])
+                        all_submissions.extend(batch)
+                        if len(batch) < 50:
+                            break
+                        offset += 50
                 else:
-                    offset += 50
-                if not batch:
-                    break
+                    raise
 
             # Store snapshot
             snapshot = LCSubmissionSnapshot(
@@ -218,13 +227,23 @@ class SyncService:
             if existing.scalar_one_or_none():
                 continue
 
+            code_snapshot = raw.get("code", "")
+            if not code_snapshot and raw.get("id"):
+                try:
+                    import asyncio
+                    await asyncio.sleep(0.3)
+                    detail = await client.get_submission_detail(str(raw["id"]))
+                    code_snapshot = detail.get("code", "")
+                except Exception as e:
+                    logger.warning("Failed to fetch code for submission %s: %s", raw["id"], e)
+
             submission = Submission(
                 user_id=user_id,
                 platform=Platform.LEETCODE,
                 problem_slug=slug,
                 problem_title=raw.get("title", slug),
                 language=raw.get("lang", "unknown"),
-                code_snapshot="",  # Code not available in list API
+                code_snapshot=code_snapshot,
                 verdict=verdict,
                 submitted_at=submitted_at,
                 analysed=False,

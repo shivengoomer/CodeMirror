@@ -58,7 +58,7 @@ export default function SubmissionsPage() {
   });
 
   return (
-    <div className="max-w-screen-2xl mx-auto flex flex-col gap-10">
+    <div className="w-9xl flex flex-col gap-10">
       <div className="flex items-end justify-between">
         <div className="flex flex-col gap-1">
           <h1 className="text-3xl font-medium tracking-tight bg-gradient-to-r from-foreground to-foreground/50 bg-clip-text text-transparent">
