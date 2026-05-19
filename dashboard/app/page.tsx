@@ -1,369 +1,352 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { PremiumCard } from "@/components/ui/PremiumCard";
+import { motion } from "framer-motion";
+import { Activity, Brain, Target, TrendingUp, AlertTriangle, CheckCircle2, Shield, Calendar, XCircle, Code2, Database, Clock } from "lucide-react";
+import clsx from "clsx";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const TOKEN_KEY = "cm_dashboard_access_token";
-
-type AnalyzeResponse = {
-  status: string;
-  submission_id?: string | null;
-  problem_slug?: string | null;
-  verdict?: string | null;
-  overlay_data?: {
-    headline: string;
-    body: string;
-    call_to_action: string;
-    badge_label: string;
-    error_types: string[];
-    concepts: string[];
-    is_recurring: boolean;
-  } | null;
-};
-
-type UserProfile = {
-  email: string;
-  leetcode_username: string | null;
-};
-
-function verdictCopy(verdict?: string | null): string {
-  switch (verdict) {
-    case "compile_error":
-      return "Your code did not compile, so this is a syntax or typing issue rather than a logic issue.";
-    case "runtime_error":
-      return "The code ran into a runtime problem, so the next step is to check input handling and unsafe operations.";
-    case "wrong_answer":
-      return "The solution compiled and ran, but the output does not match expected results.";
-    case "tle":
-      return "The code is functionally close, but it is taking too long on at least one case.";
-    case "mle":
-      return "The solution is using too much memory for at least one input.";
-    default:
-      return "The backend identified a failure and generated guidance for the next fix.";
-  }
+function MetricCard({ title, value, subtitle, icon: Icon, color, delay }: any) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay }}
+    >
+      <PremiumCard className="flex flex-col gap-4 overflow-hidden group">
+        <div className="flex items-center justify-between z-10">
+          <span className="text-foreground/50 font-mono text-xs uppercase tracking-wider">{title}</span>
+          <div className={clsx("p-2 rounded-xl bg-white/[0.03] border border-white/5", color)}>
+            <Icon size={16} />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1 z-10">
+          <span className="text-4xl font-semibold tracking-tight">{value}</span>
+          <span className="text-foreground/40 text-xs font-mono">{subtitle}</span>
+        </div>
+        
+        {/* Background gradient effect */}
+        <div className={clsx("absolute -bottom-10 -right-10 w-32 h-32 blur-3xl opacity-10 group-hover:opacity-20 transition-opacity duration-500 rounded-full", color.replace("text-", "bg-"))} />
+      </PremiumCard>
+    </motion.div>
+  );
 }
 
-function errorTypeCopy(types: string[]): string {
-  if (types.includes("compile_error_syntax")) {
-    return "Syntax-level issue";
-  }
-  if (types.includes("runtime_error_index")) {
-    return "Index access issue";
-  }
-  if (types.includes("tle_wrong_complexity")) {
-    return "Complexity issue";
-  }
-  if (types.includes("mle_large_allocation")) {
-    return "Memory issue";
-  }
-  return "General issue";
+function TopicStrengthItem({ topic, score, isWeak = false }: { topic: string, score: number, isWeak?: boolean }) {
+  return (
+    <div className="flex flex-col gap-2 p-4 rounded-xl bg-white/[0.02] border border-white/5">
+      <div className="flex items-center justify-between">
+        <span className="font-medium text-sm text-foreground/90">{topic}</span>
+        <span className={clsx("font-mono text-xs", isWeak ? "text-error" : "text-accent")}>{score.toFixed(0)}%</span>
+      </div>
+      <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+        <motion.div 
+          initial={{ width: 0 }}
+          animate={{ width: `${Math.min(100, Math.max(0, score))}%` }}
+          transition={{ duration: 1, ease: "easeOut" }}
+          className={clsx("h-full rounded-full", isWeak ? "bg-error" : "bg-accent")}
+        />
+      </div>
+    </div>
+  );
 }
 
-function statusTone(status: string): "good" | "warn" | "neutral" {
-  if (status === "processed") return "good";
-  if (status.startsWith("no_") || status === "unsupported_verdict") return "warn";
-  return "neutral";
-}
+export default function DashboardView() {
+  const { data: syncStatus, refetch: checkSync } = useQuery({
+    queryKey: ["syncStatus"],
+    queryFn: api.getSyncStatus,
+    refetchInterval: (query: any) => (query.state.data?.ready ? false : 3000),
+  });
 
-export default function HomePage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [token, setToken] = useState<string>("");
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [leetcodeUsername, setLeetcodeUsername] = useState("");
-  const [message, setMessage] = useState("");
-  const [analyzeResult, setAnalyzeResult] = useState<AnalyzeResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const initialSyncMutation = useMutation({
+    mutationFn: api.triggerInitialSync,
+    onSuccess: () => checkSync(),
+  });
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem(TOKEN_KEY) || "";
-    setToken(saved);
-  }, []);
+  const skipSyncMutation = useMutation({
+    mutationFn: api.skipInitialSync,
+    onSuccess: () => checkSync(),
+  });
 
-  useEffect(() => {
-    if (!token) return;
-    void loadProfile();
-  }, [token]);
+  const { data: summary, isLoading: isLoadingSummary } = useQuery({
+    queryKey: ["dashboardSummary"],
+    queryFn: api.getDashboardSummary,
+    enabled: !!syncStatus?.ready,
+  });
 
-  const analysisTone = useMemo(() => {
-    if (!analyzeResult) return "neutral";
-    return statusTone(analyzeResult.status);
-  }, [analyzeResult]);
+  const { data: readiness, isLoading: isLoadingReadiness } = useQuery({
+    queryKey: ["interviewReadiness"],
+    queryFn: api.getInterviewReadiness,
+    enabled: !!syncStatus?.ready,
+  });
 
-  async function loadProfile() {
-    try {
-      const res = await fetch(`${API_BASE}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail || "Profile load failed");
-      setProfile({
-        email: String(data.email || ""),
-        leetcode_username: data.leetcode_username ?? null,
-      });
-      setLeetcodeUsername(String(data.leetcode_username || ""));
-    } catch (err) {
-      setMessage(String(err));
-    }
+  if (syncStatus && !syncStatus.ready) {
+    const isSyncing = syncStatus.sync_status === "in_progress" || initialSyncMutation.isPending;
+    const hasSession = !!syncStatus.has_leetcode_session;
+
+    return (
+      <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-xl">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col items-center gap-6 p-8 max-w-md w-full"
+        >
+          <PremiumCard glow className="w-full text-center py-10 flex flex-col items-center justify-center gap-4">
+            <div className="relative flex items-center justify-center">
+              <div className="absolute inset-0 animate-ping rounded-full bg-accent/20 blur-xl"></div>
+              <Brain size={48} className="text-accent animate-pulse relative z-10" />
+            </div>
+            <h2 className="text-xl font-semibold mt-4">
+              {hasSession ? "LeetCode Connected" : "Initializing Neural Core..."}
+            </h2>
+            {hasSession ? (
+              <>
+                <p className="text-foreground/50 text-sm font-mono text-center">
+                  Import your full LeetCode history now so CodeMirror can build your dashboard, patterns, revision queue, and readiness signals from real submissions.
+                </p>
+                {syncStatus.last_sync_error && (
+                  <div className="w-full rounded-lg border border-error/20 bg-error/10 p-3 text-xs text-error font-mono text-left">
+                    {syncStatus.last_sync_error}
+                  </div>
+                )}
+                {isSyncing ? (
+                  <div className="w-full flex flex-col gap-3">
+                    <div className="flex items-center justify-center gap-2 text-accent text-sm font-mono">
+                      <Database size={16} className="animate-pulse" />
+                      Syncing all LeetCode submissions...
+                    </div>
+                    <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden relative">
+                      <motion.div
+                        className="absolute top-0 left-0 h-full bg-accent w-1/3 rounded-full"
+                        animate={{ x: ["-100%", "300%"] }}
+                        transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full pt-2">
+                    <button
+                      onClick={() => initialSyncMutation.mutate()}
+                      disabled={initialSyncMutation.isPending || skipSyncMutation.isPending}
+                      className="flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-3 text-sm font-medium text-accent-foreground hover:opacity-90 disabled:opacity-50"
+                    >
+                      <Database size={16} />
+                      Sync all data
+                    </button>
+                    <button
+                      onClick={() => skipSyncMutation.mutate()}
+                      disabled={initialSyncMutation.isPending || skipSyncMutation.isPending}
+                      className="flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-foreground/70 hover:bg-white/[0.06] disabled:opacity-50"
+                    >
+                      <Clock size={16} />
+                      Later
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="text-foreground/50 text-sm font-mono text-center">
+                  Please click the CodeMirror extension icon to authenticate with LeetCode. We are waiting for your session token.
+                </p>
+                <div className="w-full h-1 bg-white/10 rounded-full mt-4 overflow-hidden relative">
+                  <motion.div
+                    className="absolute top-0 left-0 h-full bg-accent w-1/3 rounded-full"
+                    animate={{ x: ["-100%", "300%"] }}
+                    transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                  />
+                </div>
+              </>
+            )}
+          </PremiumCard>
+        </motion.div>
+      </div>
+    );
   }
-
-  async function login() {
-    setLoading(true);
-    setMessage("");
-    try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail || "Login failed");
-      const access = String(data.access_token || "");
-      window.localStorage.setItem(TOKEN_KEY, access);
-      setToken(access);
-      setMessage("Login successful.");
-    } catch (err) {
-      setMessage(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function analyzeLatest() {
-    if (!token) {
-      setMessage("Please login first.");
-      return;
-    }
-    setLoading(true);
-    setMessage("");
-    setAnalyzeResult(null);
-    try {
-      const res = await fetch(`${API_BASE}/submissions/leetcode/latest/analyze`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail || data?.message || "Analyze failed");
-      setAnalyzeResult(data as AnalyzeResponse);
-      setMessage(`Analyze status: ${String((data as AnalyzeResponse).status)}`);
-    } catch (err) {
-      setMessage(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function logout() {
-    window.localStorage.removeItem(TOKEN_KEY);
-    setToken("");
-    setProfile(null);
-    setLeetcodeUsername("");
-    setMessage("Logged out.");
-    setAnalyzeResult(null);
-  }
-
-  async function saveProfile() {
-    if (!token) {
-      setMessage("Please login first.");
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/auth/me`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ leetcode_username: leetcodeUsername || null }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail || "Profile update failed");
-      setProfile({
-        email: String(data.email || ""),
-        leetcode_username: data.leetcode_username ?? null,
-      });
-      setMessage("Profile updated.");
-    } catch (err) {
-      setMessage(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const overlay = analyzeResult?.overlay_data ?? null;
-  const issueLabel = overlay ? errorTypeCopy(overlay.error_types) : "";
 
   return (
-    <main className="dashboard-shell">
-      <div className="dashboard-glow dashboard-glow-left" />
-      <div className="dashboard-glow dashboard-glow-right" />
-
-      <section className="hero">
-        <div>
-          <p className="eyebrow">CodeMirror</p>
-          <h1>Fix the next submission with a clear, human explanation.</h1>
-          <p className="hero-copy">
-            Login once, sync your LeetCode profile, and pull the latest failed submission into a dashboard view that tells you what failed and what to do next.
+    <div className="max-w-6xl mx-auto flex flex-col gap-8 pb-12">
+      {/* Header */}
+      <div className="flex items-end justify-between">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-4xl font-medium tracking-tight bg-gradient-to-r from-foreground to-foreground/50 bg-clip-text text-transparent">
+            Intelligence Overview
+          </h1>
+          <p className="text-foreground/40 text-sm font-mono tracking-wide flex items-center gap-2">
+            <Activity size={14} className="text-accent animate-pulse" />
+            Neural metrics active
           </p>
         </div>
+      </div>
 
-        <div className={`status-pill status-${analysisTone}`}>
-          <span className="status-dot" />
-          <span>{analyzeResult ? analyzeResult.status : token ? "Ready to analyze" : "Not logged in"}</span>
+      {(isLoadingSummary || isLoadingReadiness) && (
+        <div className="flex items-center gap-3 text-foreground/40 font-mono text-xs animate-pulse p-4">
+          <div className="w-2 h-2 rounded-full bg-accent" />
+          Synchronizing metrics...
         </div>
-      </section>
+      )}
 
-      <section className="grid-layout">
-        <aside className="panel panel-auth">
-          <div className="panel-header">
-            <h2>Access</h2>
-            <span className="panel-subtitle">Store your session once</span>
-          </div>
+      {/* Top Metrics Row */}
+      {summary && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <MetricCard 
+            title="Weekly Activity" 
+            value={summary.weekly_total} 
+            subtitle="Problems attempted" 
+            icon={Code2} 
+            color="text-blue-400"
+            delay={0.1}
+          />
+          <MetricCard 
+            title="Success Rate" 
+            value={`${summary.acceptance_rate.toFixed(0)}%`} 
+            subtitle="Accepted submissions" 
+            icon={Target} 
+            color="text-accent"
+            delay={0.2}
+          />
+          <MetricCard 
+            title="Clear" 
+            value={summary.weekly_accepted} 
+            subtitle="Accepted this week" 
+            icon={CheckCircle2} 
+            color="text-green-400"
+            delay={0.3}
+          />
+          <MetricCard 
+            title="Friction" 
+            value={summary.weekly_failed} 
+            subtitle="Failed this week" 
+            icon={XCircle} 
+            color="text-error"
+            delay={0.4}
+          />
+        </div>
+      )}
 
-          <div className="form-stack">
-            <input
-              type="email"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <div className="button-row">
-              <button onClick={login} disabled={loading} className="primary-btn">
-                Login
-              </button>
-              <button onClick={logout} className="secondary-btn">
-                Logout
-              </button>
-            </div>
-          </div>
-
-          <div className="profile-block">
-            <div className="profile-meta">
-              <p className="profile-label">Current user</p>
-              <p className="profile-value">{token ? profile?.email || "Loading profile..." : "Logged out"}</p>
-            </div>
-
-            <label className="input-label" htmlFor="leetcode-username">
-              LeetCode username
-            </label>
-            <input
-              id="leetcode-username"
-              type="text"
-              placeholder="your_leetcode_handle"
-              value={leetcodeUsername}
-              onChange={(e) => setLeetcodeUsername(e.target.value)}
-            />
-            <button onClick={saveProfile} disabled={loading || !token} className="secondary-btn full-width">
-              Save profile
-            </button>
-          </div>
-        </aside>
-
-        <section className="panel panel-result">
-          <div className="panel-header">
-            <div>
-              <h2>Latest analysis</h2>
-              <span className="panel-subtitle">Groq output rewritten for the user</span>
-            </div>
-            <button onClick={analyzeLatest} disabled={loading || !token} className="accent-btn">
-              Analyze latest failed submission
-            </button>
-          </div>
-
-          {analyzeResult ? (
-            <div className="result-stack">
-              <div className="result-hero">
-                <div className={`badge badge-${analysisTone}`}>{analyzeResult.status}</div>
-                <h3>{overlay?.headline || "Analysis ready"}</h3>
-                <p className="result-copy">
-                  {overlay?.body || "The backend found the latest failed submission and processed it."}
-                </p>
-              </div>
-
-              <div className="insight-grid">
-                <article className="insight-card spotlight">
-                  <p className="card-label">What this means</p>
-                  <p className="card-copy">
-                    {verdictCopy(analyzeResult.verdict)}
-                  </p>
-                </article>
-
-                <article className="insight-card">
-                  <p className="card-label">Next move</p>
-                  <p className="card-copy">
-                    {overlay?.call_to_action || "Review the failed case and re-run with a smaller change."}
-                  </p>
-                </article>
-              </div>
-
-              <div className="detail-grid">
-                <article className="detail-card">
-                  <p className="card-label">Submission</p>
-                  <p className="detail-value">{analyzeResult.problem_slug || "unknown"}</p>
-                  <p className="detail-meta">{analyzeResult.verdict || "unknown verdict"}</p>
-                </article>
-
-                <article className="detail-card">
-                  <p className="card-label">Issue type</p>
-                  <p className="detail-value">{issueLabel || "General issue"}</p>
-                  <p className="detail-meta">
-                    {overlay?.is_recurring ? "Recurring pattern" : "First seen or low-confidence match"}
-                  </p>
-                </article>
-
-                <article className="detail-card">
-                  <p className="card-label">Badge</p>
-                  <p className="detail-value">{overlay?.badge_label || "Saved"}</p>
-                  <p className="detail-meta">Shown in the extension after analysis</p>
-                </article>
-              </div>
-
-              <div className="tag-wrap">
-                <div className="tag-group">
-                  <span className="tag-title">Error types</span>
-                  <div className="chips">
-                    {(overlay?.error_types || []).length > 0 ? (
-                      overlay?.error_types.map((item) => <span className="chip" key={item}>{item}</span>)
-                    ) : (
-                      <span className="muted-chip">None</span>
-                    )}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Left Column: Topic Intelligence */}
+        <div className="lg:col-span-2 flex flex-col gap-6">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+            <PremiumCard glow>
+              <div className="flex flex-col gap-6">
+                <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-accent/10 rounded-lg text-accent">
+                      <Brain size={18} />
+                    </div>
+                    <h2 className="text-lg font-medium text-foreground/90">Cognitive Topic Map</h2>
                   </div>
                 </div>
 
-                <div className="tag-group">
-                  <span className="tag-title">Concepts</span>
-                  <div className="chips">
-                    {(overlay?.concepts || []).length > 0 ? (
-                      overlay?.concepts.map((item) => <span className="chip chip-alt" key={item}>{item}</span>)
-                    ) : (
-                      <span className="muted-chip">None</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="empty-state">
-              <p className="empty-title">No analysis loaded yet.</p>
-              <p className="empty-copy">
-                Save your LeetCode username, then trigger the latest analysis to see the Groq explanation here.
-              </p>
-            </div>
-          )}
-        </section>
-      </section>
+                {summary ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Weak Topics */}
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center gap-2 text-error font-mono text-xs uppercase tracking-widest">
+                        <AlertTriangle size={14} /> Critical Weaknesses
+                      </div>
+                      <div className="flex flex-col gap-3">
+                        {summary.weakest_topics?.length > 0 ? (
+                          summary.weakest_topics.map((t: any) => (
+                            <TopicStrengthItem key={t.topic} topic={t.topic} score={t.strength_score} isWeak={true} />
+                          ))
+                        ) : (
+                          <div className="text-foreground/40 text-sm font-mono p-4 border border-white/5 rounded-xl text-center">No critical weaknesses detected</div>
+                        )}
+                      </div>
+                    </div>
 
-      {message ? <p className="message-line">{message}</p> : null}
-    </main>
+                    {/* Strong Topics */}
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center gap-2 text-accent font-mono text-xs uppercase tracking-widest">
+                        <TrendingUp size={14} /> Verified Masteries
+                      </div>
+                      <div className="flex flex-col gap-3">
+                        {summary.strongest_topics?.length > 0 ? (
+                          summary.strongest_topics.map((t: any) => (
+                            <TopicStrengthItem key={t.topic} topic={t.topic} score={t.strength_score} isWeak={false} />
+                          ))
+                        ) : (
+                          <div className="text-foreground/40 text-sm font-mono p-4 border border-white/5 rounded-xl text-center">Not enough data for masteries</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-32 flex items-center justify-center text-foreground/30 font-mono text-sm">Waiting for data...</div>
+                )}
+              </div>
+            </PremiumCard>
+          </motion.div>
+        </div>
+
+        {/* Right Column: Interview Readiness */}
+        <div className="flex flex-col gap-6">
+          <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.6 }}>
+            <PremiumCard className="border-l-4 border-l-purple-500 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-purple-500/10 blur-[80px] rounded-full pointer-events-none" />
+              <div className="flex flex-col gap-8 relative z-10">
+                <div className="flex items-center gap-3 border-b border-white/5 pb-4">
+                  <div className="p-2 bg-purple-500/10 rounded-lg text-purple-400">
+                    <Shield size={18} />
+                  </div>
+                  <h2 className="text-lg font-medium text-foreground/90">Interview Readiness</h2>
+                </div>
+
+                {readiness && readiness.status !== "not_assessed" ? (
+                  <div className="flex flex-col gap-8 items-center pt-4">
+                    {/* Score Ring */}
+                    <div className="relative w-32 h-32 flex items-center justify-center">
+                      <svg className="absolute w-full h-full transform -rotate-90">
+                        <circle cx="64" cy="64" r="56" stroke="currentColor" strokeWidth="8" fill="none" className="text-white/5" />
+                        <circle 
+                          cx="64" cy="64" r="56" stroke="currentColor" strokeWidth="8" fill="none" 
+                          strokeDasharray="351.8" strokeDashoffset={351.8 - (351.8 * readiness.overall_score) / 100}
+                          className="text-purple-500 transition-all duration-1000 ease-out" 
+                        />
+                      </svg>
+                      <div className="flex flex-col items-center">
+                        <span className="text-4xl font-bold text-foreground">{readiness.overall_score.toFixed(0)}</span>
+                        <span className="text-[10px] text-foreground/40 font-mono uppercase tracking-widest">/ 100</span>
+                      </div>
+                    </div>
+
+                    <div className="w-full flex flex-col gap-4">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-foreground/60">Target: {readiness.target_company || "FAANG"}</span>
+                        <span className="text-purple-400 font-mono">{readiness.estimated_days_to_ready || "?"} days</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono">
+                        <div className="bg-white/5 p-2 rounded-lg border border-white/5 flex flex-col gap-1">
+                          <span className="text-foreground/40">Easy</span>
+                          <span className="text-green-400">{(readiness.easy_score || 0).toFixed(0)}%</span>
+                        </div>
+                        <div className="bg-white/5 p-2 rounded-lg border border-white/5 flex flex-col gap-1">
+                          <span className="text-foreground/40">Med</span>
+                          <span className="text-yellow-400">{(readiness.medium_score || 0).toFixed(0)}%</span>
+                        </div>
+                        <div className="bg-white/5 p-2 rounded-lg border border-white/5 flex flex-col gap-1">
+                          <span className="text-foreground/40">Hard</span>
+                          <span className="text-error">{(readiness.hard_score || 0).toFixed(0)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-8 flex flex-col items-center justify-center text-center gap-3 border border-dashed border-white/10 rounded-2xl bg-white/[0.01]">
+                    <Calendar className="text-foreground/20" size={24} />
+                    <span className="text-foreground/40 text-sm font-mono max-w-[200px]">Solve more problems to unlock readiness assessment</span>
+                  </div>
+                )}
+              </div>
+            </PremiumCard>
+          </motion.div>
+        </div>
+      </div>
+    </div>
   );
 }

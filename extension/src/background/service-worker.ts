@@ -8,6 +8,14 @@ import {
 } from "../shared/storage";
 import type { ExtensionMessage, MessageResponse } from "../shared/types";
 
+let leetcodeCookieDebugLogged = false;
+
+function redactSecret(value: string | null): string {
+  if (!value) return "missing";
+  if (value.length <= 12) return `present(len=${value.length})`;
+  return `${value.slice(0, 6)}...${value.slice(-6)}(len=${value.length})`;
+}
+
 chrome.runtime.onMessage.addListener(
   (
     message: ExtensionMessage,
@@ -99,6 +107,25 @@ async function getLeetCodeCookies(): Promise<{
   if (session && csrf) {
     headers.Cookie = `LEETCODE_SESSION=${session}; csrftoken=${csrf}`;
     headers["x-csrftoken"] = csrf;
+  }
+
+  if (!leetcodeCookieDebugLogged) {
+    leetcodeCookieDebugLogged = true;
+    console.info("[CodeMirror] LeetCode cookie capture debug", {
+      hasSessionCookie: Boolean(sessionCookie),
+      hasCsrfCookie: Boolean(csrfCookie),
+      session: redactSecret(session),
+      csrf: redactSecret(csrf),
+      sessionDomain: sessionCookie?.domain,
+      csrfDomain: csrfCookie?.domain,
+      sessionExpirationDate: sessionCookie?.expirationDate,
+      csrfExpirationDate: csrfCookie?.expirationDate,
+      headerKeys: Object.keys(headers),
+      cookieHeaderPreview: headers.Cookie
+        ? headers.Cookie.replace(/LEETCODE_SESSION=([^;]+)/, (_m, value) => `LEETCODE_SESSION=${redactSecret(value)}`)
+            .replace(/csrftoken=([^;]+)/, (_m, value) => `csrftoken=${redactSecret(value)}`)
+        : "missing",
+    });
   }
 
   return { session, csrf, headers };
