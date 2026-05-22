@@ -56,7 +56,7 @@ def _build_overlay(ai_analysis: dict) -> OverlayData:
         error_types=[ai_analysis["failure_category"]] if ai_analysis.get("failure_category") else [],
         concepts=[],
         is_recurring=ai_analysis.get("pattern_signal") is not None,
-        ai_analysis=ai_analysis,
+        ai_analysis=ai_analysis if ai_analysis.get("failure_category") else None,
     )
 
 
@@ -174,7 +174,7 @@ async def create_submission(
             problem_slug=body.problem_slug,
             problem_title=body.problem_title,
             language=body.language,
-            code_snapshot=body.code[:50000],
+            code_snapshot=body.code[:50000] if body.code else "",
             verdict=body.verdict,
             failing_test_cases=[c.model_dump() for c in body.failing_test_cases],
             error_message=body.error_message,
@@ -185,46 +185,36 @@ async def create_submission(
         db.add(submission)
         await db.flush()
 
-        # Enrich with LeetCode metadata if available
-        enriched_tags: list[dict] = []
-        detail: dict = {}
+        # Persist incoming LeetCode session cookies and headers to LeetCodeSession record if provided
         if body.platform == "leetcode" and body.leetcode_session and body.leetcode_csrf:
-            lc_client = LeetCodeClient(body.leetcode_session, body.leetcode_csrf)
-            try:
-                if body.leetcode_submission_id is not None:
-                    detail = await lc_client.get_submission_detail(str(body.leetcode_submission_id))
-                metadata = await LeetCodeCacheService(db).get_problem_metadata(body.problem_slug, lc_client)
-                enriched_tags = metadata.get("tags", [])
-            except Exception:
-                pass  # non-fatal; proceed without enrichment
+            session_stmt = select(LeetCodeSession).where(LeetCodeSession.user_id == current_user.id)
+            session_row = (await db.execute(session_stmt)).scalar_one_or_none()
+            if session_row:
+                session_row.leetcode_session = body.leetcode_session
+                session_row.leetcode_csrf = body.leetcode_csrf
+                if body.leetcode_headers:
+                    session_row.leetcode_headers = body.leetcode_headers
+            else:
+                new_session = LeetCodeSession(
+                    user_id=current_user.id,
+                    leetcode_session=body.leetcode_session,
+                    leetcode_csrf=body.leetcode_csrf,
+                    leetcode_headers=body.leetcode_headers or {},
+                )
+                db.add(new_session)
+            await db.flush()
 
-        # AI analysis
-        analysis_context = {
-            "slug": body.problem_slug,
-            "difficulty": (detail.get("question") or {}).get("difficulty", "Unknown"),
-            "tags": [t.get("name") for t in enriched_tags if isinstance(t, dict)],
-            "error_type": body.verdict.upper(),
-            "wrong_code": body.code[:50000],
-        }
-        ai_analysis = await GroqCacheService(db).get_submission_analysis(submission.id, analysis_context, GroqClient())
-        submission.ai_analysis = ai_analysis
-        submission.analysed = True
-
-        # Link to known patterns via pattern_signal
-        if ai_analysis.get("pattern_signal"):
-            known_result = await db.execute(select(Pattern).where(Pattern.user_id == current_user.id))
-            signal = str(ai_analysis["pattern_signal"]).lower()
-            for pattern in known_result.scalars().all():
-                if pattern.title.lower() in signal:
-                    try:
-                        db.add(SubmissionTag(
-                            submission_id=submission.id,
-                            pattern_id=pattern.id,
-                            role=SubmissionTagRole.PRIMARY,
-                        ))
-                    except Exception:
-                        continue
-        await db.flush()
+        # Call AnalysisService synchronously to process the ingestion
+        from app.services.analysis_service import AnalysisService
+        service = AnalysisService(db)
+        
+        lc_sub_id_str = str(body.leetcode_submission_id) if body.leetcode_submission_id else None
+        analysis_record = await service.analyze_submission(str(submission.id), leetcode_submission_id=lc_sub_id_str)
+        
+        if not analysis_record:
+            logger.warning("Analysis record not generated for submission %s (empty analysis response)", str(submission.id))
+            
+        ai_analysis = submission.ai_analysis or {}
 
         # Upsert revision queue
         existing_rq = await db.scalar(
@@ -300,6 +290,25 @@ async def analyze_latest_leetcode_submission(
     detail = await lc_client.get_submission_detail(str(lc_submission_id))
     question = detail.get("question") or {} if isinstance(detail, dict) else {}
 
+    error_message = None
+    if isinstance(detail, dict):
+        if detail.get("compileError"):
+            error_message = detail["compileError"]
+        elif detail.get("runtimeError"):
+            error_message = detail["runtimeError"]
+
+    if error_message is None:
+        error_message = str(detail.get("statusDisplay") or latest_failed.get("statusDisplay") or "") or None
+
+    failing_test_cases = []
+    if isinstance(detail, dict):
+        if detail.get("lastTestcase") or detail.get("expectedOutput") or detail.get("codeOutput"):
+            failing_test_cases.append({
+                "input": detail.get("lastTestcase") or "",
+                "expected": detail.get("expectedOutput") or "",
+                "got": detail.get("codeOutput") or "",
+            })
+
     payload = UnifiedSubmissionIn(
         platform="leetcode",
         problem_slug=str(question.get("titleSlug") or latest_failed.get("titleSlug") or ""),
@@ -307,8 +316,8 @@ async def analyze_latest_leetcode_submission(
         language=str(detail.get("lang") or latest_failed.get("lang") or "unknown"),
         code=str(detail.get("code") or ""),
         verdict=verdict,
-        failing_test_cases=[],
-        error_message=str(detail.get("statusDisplay") or latest_failed.get("statusDisplay") or "") or None,
+        failing_test_cases=failing_test_cases,
+        error_message=error_message,
         timestamp=timestamp_ms,
         leetcode_submission_id=lc_submission_id,
         leetcode_session=session_row.leetcode_session,

@@ -11,6 +11,7 @@ from app.models.ai_analysis import AIAnalysis
 from app.models.pattern_detection import PatternDetection
 from app.models.topic_strength import TopicStrength
 from app.models.learning_style import LearningStyle
+from app.models.submission import Submission
 from app.services.analysis_service import AnalysisService
 from app.workers.analysis_worker import analyze_submission_task
 from app.workers.pattern_worker import detect_patterns_task, update_topic_strength_task
@@ -29,7 +30,34 @@ async def get_analysis(
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis not found")
+        # Check if the submission exists
+        sub_result = await db.execute(
+            select(Submission).where(Submission.id == submission_id, Submission.user_id == current_user.id)
+        )
+        submission = sub_result.scalar_one_or_none()
+        if not submission:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Submission not found")
+        
+        # Trigger analysis synchronously
+        service = AnalysisService(db)
+        try:
+            analysis = await service.analyze_submission(str(submission_id))
+        except Exception as e:
+            import traceback
+            print("=== SYNC ANALYSIS EXCEPTION ===")
+            traceback.print_exc()
+            raise e
+        if not analysis:
+            # Recheck in case of concurrent writes
+            result = await db.execute(
+                select(AIAnalysis).where(AIAnalysis.submission_id == submission_id, AIAnalysis.user_id == current_user.id)
+            )
+            analysis = result.scalar_one_or_none()
+            if not analysis:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Analysis not found and failed to analyze")
+        else:
+            await db.commit()
+
     return {
         "id": str(analysis.id),
         "submission_id": str(analysis.submission_id),

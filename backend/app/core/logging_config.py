@@ -70,8 +70,50 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
+class StructlogFallbackLogger:
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
+
+    def _log(self, level: int, msg: str, *args, **kwargs):
+        std_kwargs = {}
+        extra = {}
+        for k, v in kwargs.items():
+            if k in ("exc_info", "stack_info", "stacklevel", "extra"):
+                std_kwargs[k] = v
+            else:
+                extra[k] = v
+        if extra:
+            if "extra" not in std_kwargs:
+                std_kwargs["extra"] = {}
+            std_kwargs["extra"].update(extra)
+        
+        self._logger.log(level, msg, *args, **std_kwargs)
+
+    def debug(self, msg: str, *args, **kwargs):
+        self._log(logging.DEBUG, msg, *args, **kwargs)
+
+    def info(self, msg: str, *args, **kwargs):
+        self._log(logging.INFO, msg, *args, **kwargs)
+
+    def warning(self, msg: str, *args, **kwargs):
+        self._log(logging.WARNING, msg, *args, **kwargs)
+
+    def error(self, msg: str, *args, **kwargs):
+        self._log(logging.ERROR, msg, *args, **kwargs)
+
+    def exception(self, msg: str, *args, **kwargs):
+        kwargs.setdefault("exc_info", True)
+        self._log(logging.ERROR, msg, *args, **kwargs)
+
+    def critical(self, msg: str, *args, **kwargs):
+        self._log(logging.CRITICAL, msg, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._logger, name)
+
+
 def get_logger(name: str = "codemirror"):
     """Return a structured logger instance."""
     if structlog is None:
-        return logging.getLogger(name)
+        return StructlogFallbackLogger(logging.getLogger(name))
     return structlog.get_logger(name)

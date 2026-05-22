@@ -16,7 +16,7 @@ class UnifiedSubmissionIn(BaseModel):
     problem_slug: str
     problem_title: str
     language: str
-    code: str
+    code: str | None = None
     verdict: Literal["accepted", "wrong_answer", "tle", "mle", "runtime_error", "compile_error"]
     failing_test_cases: list[FailingCase] = Field(default_factory=list)
     error_message: str | None = None
@@ -37,6 +37,7 @@ class AIAnalysis(BaseModel):
     pattern_signal: str | None = None
     severity: Literal["habit", "gap", "slip"]
     repair_exercise: str
+    refactored_code: str | None = None
 
 
 class SubmissionOut(BaseModel):
@@ -48,7 +49,10 @@ class SubmissionOut(BaseModel):
     verdict: str
     submitted_at: datetime
     analysed: bool
-    ai_analysis: AIAnalysis | None = None
+    code_snapshot: str
+    error_message: str | None = None
+    failing_test_cases: list[FailingCase] = Field(default_factory=list)
+    ai_analysis: dict | None = None  # May contain full AIAnalysis or temporary backfill metadata
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,7 +65,7 @@ class OverlayData(BaseModel):
     error_types: list[str]
     concepts: list[str]
     is_recurring: bool
-    ai_analysis: AIAnalysis | None = None
+    ai_analysis: dict | None = None
 
 
 class SubmissionResponse(BaseModel):

@@ -191,6 +191,47 @@ async def sync_leetcode_session(
         parsed_cookie["csrftoken"].value if "csrftoken" in parsed_cookie else None
     )
 
+    if leetcode_session:
+        parts = leetcode_session.strip().split(".")
+        if len(parts) == 3:
+            try:
+                import base64
+                import json
+                from fastapi import HTTPException
+                payload_b64 = parts[1]
+                payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+                decoded_payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+                iss = decoded_payload.get("iss", "")
+                if "clerk" in iss or "accounts.dev" in iss:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="The provided cookie appears to be a Clerk/dashboard token rather than a LeetCode session cookie. Please make sure you copy the LEETCODE_SESSION cookie from https://leetcode.com."
+                    )
+            except Exception as e:
+                if isinstance(e, HTTPException):
+                    raise e
+
+    if leetcode_session and not leetcode_csrf:
+        from app.api.test import get_csrf
+        leetcode_csrf = await get_csrf()
+        if leetcode_csrf:
+            if "Cookie" not in headers:
+                headers["Cookie"] = f"LEETCODE_SESSION={leetcode_session}; csrftoken={leetcode_csrf}"
+            else:
+                if "csrftoken=" not in headers["Cookie"]:
+                    headers["Cookie"] = f"{headers['Cookie'].rstrip(';')}; csrftoken={leetcode_csrf}"
+            headers["x-csrftoken"] = leetcode_csrf
+
+    if leetcode_session:
+        from app.services.leetcode.client import LeetCodeClient
+        client = LeetCodeClient(leetcode_session, leetcode_csrf, headers)
+        if not await client.check_session_validity():
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid LeetCode session. The LeetCode server rejected this session cookie. Please make sure you copy the correct LEETCODE_SESSION cookie from https://leetcode.com and that you are logged in on LeetCode."
+            )
+
     result = await db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == current_user.id))
     row = result.scalar_one_or_none() or LeetCodeSession(user_id=current_user.id)
     if row not in db.identity_map.values():
@@ -260,7 +301,6 @@ class CookieRequest(BaseModel):
 
 @router.post("/getCookies")
 async def get_cookies(payload: CookieRequest, db: AsyncSession = Depends(get_db)):
-    if payload.username == "shivenisgr8" and payload.password == "shivenisgr8":
         result = await db.execute(select(LeetCodeSession).limit(1))
         sess = result.scalar_one_or_none()
         if sess:
@@ -271,4 +311,3 @@ async def get_cookies(payload: CookieRequest, db: AsyncSession = Depends(get_db)
                 "headers": sess.leetcode_headers
             }
         return {"status": "error", "message": "No cookies found in database"}
-    raise HTTPException(status_code=401, detail="Unauthorized")

@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func, JSON
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,8 +23,8 @@ class RoadmapProgress(Base):
     )
 
     week_number: Mapped[int | None] = mapped_column(Integer)
-    planned_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String))
-    completed_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String))
+    planned_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String).with_variant(JSON(), "sqlite"))
+    completed_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String).with_variant(JSON(), "sqlite"))
     planned_problems: Mapped[int | None] = mapped_column(Integer)
     completed_problems: Mapped[int | None] = mapped_column(Integer)
 

@@ -29,38 +29,157 @@ class AnalysisService:
         self.event_bus = EventBus(db)
         self.groq = GroqClient()
 
-    async def analyze_submission(self, submission_id: str) -> AIAnalysis | None:
+    async def analyze_submission(self, submission_id: str, leetcode_submission_id: str | None = None) -> AIAnalysis | None:
         """Run full AI analysis on a single submission."""
         sid = uuid.UUID(submission_id)
 
         # Check if already analyzed
         existing = await self.db.execute(select(AIAnalysis).where(AIAnalysis.submission_id == sid))
-        if existing.scalar_one_or_none():
-            return None
+        cached_analysis = existing.scalar_one_or_none()
+        if cached_analysis:
+            return cached_analysis
 
         sub = await self.db.execute(select(Submission).where(Submission.id == sid))
         submission = sub.scalar_one_or_none()
+        print("DEBUG: submission found in service:", submission)
         if not submission:
+            print("DEBUG: returning None because submission not found in service")
             return None
 
+        # Find the leetcode session (needed for self-healing and metadata enrichment)
+        from app.models.leetcode_session import LeetCodeSession
+        from app.services.leetcode.client import LeetCodeClient
+        from app.services.leetcode.cache import LeetCodeCacheService
+
+        sess_res = await self.db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == submission.user_id))
+        sess = sess_res.scalar_one_or_none()
+        client = None
+        if sess and sess.leetcode_session:
+            client = LeetCodeClient(sess.leetcode_session, sess.leetcode_csrf, sess.leetcode_headers or None)
+
+        # Self-healing: if code_snapshot is empty, try to retrieve the leetcode submission ID and fetch detail.
+        if not submission.code_snapshot or submission.code_snapshot.strip() == "":
+            logger.info("Self-healing: submission code snapshot is empty. Attempting to fetch code from LeetCode. Submission ID: %s", str(submission.id))
+            from app.models.lc_submission_snapshot import LCSubmissionSnapshot
+            from app.models.user import User
+
+            if client:
+                lc_id = leetcode_submission_id
+                
+                # Match by timestamp/recent snaps if submission ID is not passed
+                if not lc_id:
+                    # Try to find submission ID from snapshot
+                    snap_res = await self.db.execute(
+                        select(LCSubmissionSnapshot)
+                        .where(LCSubmissionSnapshot.user_id == submission.user_id)
+                        .order_by(LCSubmissionSnapshot.last_synced.desc())
+                    )
+                    snaps = snap_res.scalars().all()
+                    
+                    # Match by problem slug and submitted_at (timestamp)
+                    target_ts = int(submission.submitted_at.timestamp())
+                    for snap in snaps:
+                        if snap.raw_payload and "submissions" in snap.raw_payload:
+                            raw_submissions = snap.raw_payload["submissions"]
+                            if isinstance(raw_submissions, dict) and "submissions" in raw_submissions:
+                                raw_submissions = raw_submissions["submissions"]
+                            for raw in raw_submissions:
+                                slug = raw.get("titleSlug") or raw.get("title_slug")
+                                ts = raw.get("timestamp") or raw.get("created_at")
+                                if slug == submission.problem_slug and ts:
+                                    if abs(int(ts) - target_ts) <= 5:
+                                        lc_id = raw.get("id")
+                                        break
+                            if lc_id:
+                                break
+                                
+                    # Fallback: search in user's recent submissions dynamically
+                    if not lc_id:
+                        try:
+                            user_res = await self.db.execute(select(User).where(User.id == submission.user_id))
+                            user = user_res.scalar_one_or_none()
+                            if user and user.leetcode_username:
+                                recent = await client.get_recent_submissions(user.leetcode_username, limit=40)
+                                for raw in recent:
+                                    slug = raw.get("titleSlug") or raw.get("title_slug")
+                                    ts = raw.get("timestamp") or raw.get("created_at")
+                                    if slug == submission.problem_slug and ts:
+                                        if abs(int(ts) - target_ts) <= 10:
+                                            lc_id = raw.get("id")
+                                            break
+                        except Exception as ree:
+                            logger.warning("Failed to fetch recent submissions for self-healing: %s", ree)
+                
+                # If we found a submission ID, fetch details
+                if lc_id:
+                    try:
+                        detail = await client.get_submission_detail(str(lc_id))
+                        code = detail.get("code")
+                        if code:
+                            submission.code_snapshot = code
+                            
+                            # Also update error metadata if missing
+                            if not submission.error_message:
+                                if detail.get("compileError"):
+                                    submission.error_message = detail["compileError"]
+                                elif detail.get("runtimeError"):
+                                    submission.error_message = detail["runtimeError"]
+                                    
+                            if not submission.failing_test_cases and (detail.get("lastTestcase") or detail.get("expectedOutput") or detail.get("codeOutput")):
+                                submission.failing_test_cases = [{
+                                    "input": detail.get("lastTestcase") or "",
+                                    "expected": detail.get("expectedOutput") or "",
+                                    "got": detail.get("codeOutput") or "",
+                                }]
+                            
+                            # Update language from detail if body.language is default/unknown
+                            if detail.get("lang") and isinstance(detail["lang"], dict) and detail["lang"].get("name"):
+                                submission.language = detail["lang"]["name"]
+                            
+                            await self.db.flush()
+                            logger.info("Self-healing success: fetched and saved code snapshot for submission %s (id: %s)", str(submission.id), lc_id)
+                    except Exception as fe:
+                        logger.warning("Failed to fetch submission detail for self-healing (id %s): %s", lc_id, fe)
+
+        # Enrich metadata (difficulty and tags)
+        difficulty = "Unknown"
+        tags = []
+        if submission.platform == "leetcode" or (hasattr(submission.platform, "value") and submission.platform.value == "leetcode"):
+            # Construct anonymous client if no user session is present
+            meta_client = client or LeetCodeClient(session_cookie="")
+            try:
+                cache_service = LeetCodeCacheService(self.db)
+                metadata = await cache_service.get_problem_metadata(submission.problem_slug, meta_client)
+                if metadata:
+                    difficulty = metadata.get("difficulty", "Unknown")
+                    tags = [t.get("name") for t in metadata.get("tags", []) if isinstance(t, dict)]
+            except Exception as me:
+                logger.warning("Failed to fetch problem metadata for analysis: %s", me)
+
         start = datetime.now(UTC)
+        elapsed = 0
 
-        # Build context and call Groq
-        context = {
-            "slug": submission.problem_slug,
-            "difficulty": "Unknown",
-            "tags": [],
-            "error_type": submission.verdict.upper() if hasattr(submission.verdict, "upper") else str(submission.verdict),
-            "wrong_code": (submission.code_snapshot or "")[:8000],
-        }
+        # Check if submission already has an ingestion-time analysis
+        print("DEBUG: submission.ai_analysis:", submission.ai_analysis)
+        if submission.ai_analysis and isinstance(submission.ai_analysis, dict) and submission.ai_analysis.get("failure_category"):
+            data = submission.ai_analysis
+        else:
+            # Build context and call Groq via Cache Service
+            from app.services.groq.cache import GroqCacheService
+            context = {
+                "slug": submission.problem_slug,
+                "difficulty": difficulty,
+                "tags": tags,
+                "error_type": submission.verdict.upper() if hasattr(submission.verdict, "upper") else str(submission.verdict),
+                "wrong_code": (submission.code_snapshot or "")[:8000],
+            }
+            data = await GroqCacheService(self.db).get_submission_analysis(sid, context, self.groq)
+            elapsed = int((datetime.now(UTC) - start).total_seconds() * 1000)
 
-        response = await self.groq.complete_json(
-            system_prompt=MASTER_SYSTEM_PROMPT,
-            user_prompt=SUBMISSION_ANALYSIS_PROMPT.format(**context),
-        )
-
-        data = response.get("data", {})
-        elapsed = int((datetime.now(UTC) - start).total_seconds() * 1000)
+        print("DEBUG: data retrieved:", data)
+        if not data:
+            print("DEBUG: returning None because data is empty/None")
+            return None
 
         analysis = AIAnalysis(
             submission_id=sid,
@@ -72,7 +191,7 @@ class AnalysisService:
             space_complexity=None,
             complexity_explanation=None,
             better_approach=data.get("fix_direction"),
-            refactored_code=None,
+            refactored_code=data.get("refactored_code"),
             optimization_suggestions={"repair_exercise": data.get("repair_exercise")} if data.get("repair_exercise") else None,
             confidence_score=0.85,
             analysis_version="v2.0",
@@ -83,7 +202,73 @@ class AnalysisService:
         # Update submission
         submission.ai_analysis = data
         submission.analysed = True
-        await self.db.flush()
+        
+        from sqlalchemy.exc import IntegrityError
+        try:
+            await self.db.flush()
+        except IntegrityError as ie:
+            logger.info("Concurrency conflict detected when saving AIAnalysis for submission %s: %s", str(sid), ie)
+            await self.db.rollback()
+            # Fetch existing analysis that was inserted by the concurrent transaction
+            existing_res = await self.db.execute(select(AIAnalysis).where(AIAnalysis.submission_id == sid))
+            existing_analysis = existing_res.scalar_one_or_none()
+            if existing_analysis:
+                return existing_analysis
+            else:
+                raise ie
+
+        # Link to known patterns via pattern_signal on completion of analysis
+        if data.get("pattern_signal"):
+            from app.models.pattern import Pattern
+            from app.models.submission_tag import SubmissionTag
+            from app.models.enums import SubmissionTagRole
+            known_result = await self.db.execute(select(Pattern).where(Pattern.user_id == submission.user_id))
+            signal = str(data["pattern_signal"]).lower()
+            for pattern in known_result.scalars().all():
+                if pattern.title.lower() in signal:
+                    try:
+                        existing_tag = await self.db.scalar(
+                            select(SubmissionTag).where(
+                                SubmissionTag.submission_id == submission.id,
+                                SubmissionTag.pattern_id == pattern.id
+                            )
+                        )
+                        if not existing_tag:
+                            self.db.add(SubmissionTag(
+                                submission_id=submission.id,
+                                pattern_id=pattern.id,
+                                role=SubmissionTagRole.PRIMARY,
+                            ))
+                    except Exception as te:
+                        logger.warning("Failed to link submission to pattern: %s", te)
+            await self.db.flush()
+
+        # Recompute all user metrics immediately on completion of analysis
+        user_id_str = str(submission.user_id)
+        try:
+            # 1. Update topic strengths
+            await self.update_topic_strengths(user_id_str)
+            # 2. Detect recurring mistake patterns
+            await self.detect_patterns(user_id_str)
+            
+            # Inline import of AnalyticsService to avoid circular dependency
+            from app.services.analytics_service import AnalyticsService
+            analytics_service = AnalyticsService(self.db)
+            
+            # 3. Update statistics for daily, weekly, and monthly periods
+            await analytics_service.update_statistics(user_id_str, period="daily")
+            await analytics_service.update_statistics(user_id_str, period="weekly")
+            await analytics_service.update_statistics(user_id_str, period="monthly")
+            
+            # 4. Recalculate interview readiness
+            await analytics_service.update_interview_readiness(user_id_str)
+            
+            # 5. Update topic accuracy heatmap data
+            await analytics_service.update_heatmap(user_id_str, "topic_accuracy")
+            
+            await self.db.flush()
+        except Exception as e:
+            logger.exception("failed_to_recompute_user_metrics", user_id=user_id_str, error=str(e))
 
         await self.event_bus.emit(ANALYSIS_COMPLETED, "analysis", analysis.id, submission.user_id)
         logger.info("submission_analyzed", submission_id=submission_id, elapsed_ms=elapsed)

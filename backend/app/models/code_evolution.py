@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func, JSON
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,5 +22,5 @@ class CodeEvolution(Base):
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     submission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("submissions.id"))
     stage: Mapped[str | None] = mapped_column(String(50))
-    improvements_made: Mapped[list[str] | None] = mapped_column(ARRAY(String))
+    improvements_made: Mapped[list[str] | None] = mapped_column(ARRAY(String).with_variant(JSON(), "sqlite"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

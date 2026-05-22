@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func, JSON
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,7 +30,7 @@ class LearningStyle(Base):
     average_session_length_min: Mapped[int | None] = mapped_column(Integer)
     average_problems_per_session: Mapped[float | None] = mapped_column(Float)
     preferred_difficulty: Mapped[str | None] = mapped_column(String(20))
-    preferred_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String))
+    preferred_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String).with_variant(JSON(), "sqlite"))
 
     # Learning preferences
     learns_from_mistakes: Mapped[bool | None] = mapped_column(Boolean)

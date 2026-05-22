@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     auth, cache, chat, notifications, patterns,
     revision, submissions, sync, health, analysis,
-    analytics_routes, roadmap, insights, revision_v1,
+    analytics_routes, roadmap, insights, revision_v1, test,
 )
 from app.core.config import get_settings
 from app.core.database import check_database_connection
@@ -94,6 +94,7 @@ app.include_router(notifications.router)
 app.include_router(chat.router)
 app.include_router(sync.router)
 app.include_router(cache.router)
+app.include_router(test.router)
 
 # ── Routers (new v2 — under /api/v1) ─────────────────────────────
 
@@ -110,3 +111,4 @@ app.include_router(insights.router, prefix=v1_prefix)
 app.include_router(analysis.router, prefix=v1_prefix)
 app.include_router(analytics_routes.router, prefix=v1_prefix)
 app.include_router(roadmap.router, prefix=v1_prefix)
+app.include_router(test.router, prefix=v1_prefix)

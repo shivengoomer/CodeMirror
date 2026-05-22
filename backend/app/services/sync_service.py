@@ -51,12 +51,25 @@ class SyncService:
             )
             auth_token = token_result.scalar_one_or_none()
             if auth_token:
-                return LeetCodeClient(TokenManager().decrypt(auth_token.encrypted_session_token), auth_token.csrf_token)
+                session = TokenManager().decrypt(auth_token.encrypted_session_token)
+                if session and len(session) > 20:
+                    return LeetCodeClient(session, auth_token.csrf_token)
 
         result = await self.db.execute(select(LeetCodeSession).where(LeetCodeSession.user_id == uid))
         session = result.scalar_one_or_none()
         if not session or not session.leetcode_session:
+            logger.warning("no_leetcode_session_for_user user_id=%s", user_id)
             return None
+
+        # Real LEETCODE_SESSION cookies are 100s of chars; short values are placeholders
+        if len(session.leetcode_session) <= 20:
+            logger.warning(
+                "leetcode_session_looks_invalid user_id=%s len=%d value=%r — "
+                "Go to Settings and paste your real LEETCODE_SESSION cookie",
+                user_id, len(session.leetcode_session), session.leetcode_session,
+            )
+            return None
+
         return LeetCodeClient(session.leetcode_session, session.leetcode_csrf, session.leetcode_headers or None)
 
     async def _get_or_create_sync_state(self, user_id: uuid.UUID) -> SyncState:
@@ -175,32 +188,57 @@ class SyncService:
 
         state = await self._get_or_create_sync_state(uid)
         last_synced_ts = int(state.last_synced_at.timestamp()) if state.last_synced_at else 0
+        
+        state.sync_status = "in_progress"
+        state.last_sync_error = None
+        await self.db.commit()
 
         user_result = await self.db.execute(select(User).where(User.id == uid))
         user = user_result.scalar_one_or_none()
         if not user or not user.leetcode_username:
+            state_res = await self.db.execute(select(SyncState).where(SyncState.user_id == uid))
+            st = state_res.scalar_one_or_none()
+            if st:
+                st.sync_status = "failed"
+                st.last_sync_error = "Missing username"
+            await self.db.commit()
             return {"status": "error", "message": "Missing username"}
 
         try:
             recent = await client.get_recent_submissions(user.leetcode_username, limit=20)
             new_subs = [s for s in recent if int(s.get("timestamp", 0)) > last_synced_ts]
 
+            state_res = await self.db.execute(select(SyncState).where(SyncState.user_id == uid))
+            state = state_res.scalar_one()
+
             if not new_subs:
+                state.sync_status = "completed"
+                state.last_synced_at = datetime.now(UTC)
+                await self.db.commit()
                 return {"status": "no_new_submissions"}
 
             count = await self._hydrate_submissions(uid, new_subs, client)
             state.last_synced_at = datetime.now(UTC)
             state.total_submissions = (state.total_submissions or 0) + count
+            state.sync_status = "completed"
+            await self.db.commit()
 
             logger.info("incremental_sync_completed", user_id=user_id, new_submissions=count)
             return {"status": "completed", "new_submissions": count}
 
         except Exception as e:
             logger.exception("incremental_sync_failed", user_id=user_id)
+            state_res = await self.db.execute(select(SyncState).where(SyncState.user_id == uid))
+            st = state_res.scalar_one_or_none()
+            if st:
+                st.sync_status = "failed"
+                st.last_sync_error = str(e)
+            await self.db.commit()
             return {"status": "failed", "error": str(e)}
 
     async def _hydrate_submissions(self, user_id: uuid.UUID, raw_subs: list[dict], client: LeetCodeClient) -> int:
         """Convert raw LeetCode submissions into normalized Submission rows."""
+        import asyncio
         count = 0
         for raw in raw_subs:
             raw_status = str(raw.get("statusDisplay", "")).strip().lower()
@@ -228,14 +266,62 @@ class SyncService:
                 continue
 
             code_snapshot = raw.get("code", "")
-            if not code_snapshot and raw.get("id"):
+            error_message = None
+            failing_test_cases = []
+            lc_submission_id = raw.get("id")
+            code_fetch_failed = False
+
+            if lc_submission_id:
                 try:
-                    import asyncio
-                    await asyncio.sleep(0.3)
-                    detail = await client.get_submission_detail(str(raw["id"]))
-                    code_snapshot = detail.get("code", "")
+                    await asyncio.sleep(0.3)  # Throttle to avoid rate-limiting
+                    detail = await client.get_submission_detail(str(lc_submission_id))
+                    if detail:
+                        fetched_code = detail.get("code") or ""
+                        if fetched_code:
+                            code_snapshot = fetched_code
+                        else:
+                            logger.warning(
+                                "code_fetch_empty_for_submission",
+                                submission_id=str(lc_submission_id),
+                                slug=slug,
+                            )
+                            code_fetch_failed = True
+
+                        # Extract error message
+                        if detail.get("compileError"):
+                            error_message = detail["compileError"]
+                        elif detail.get("runtimeError"):
+                            error_message = detail["runtimeError"]
+
+                        # Extract failing test cases
+                        if detail.get("lastTestcase") or detail.get("expectedOutput") or detail.get("codeOutput"):
+                            failing_test_cases.append({
+                                "input": detail.get("lastTestcase") or "",
+                                "expected": detail.get("expectedOutput") or "",
+                                "got": detail.get("codeOutput") or "",
+                            })
+                    else:
+                        logger.warning(
+                            "code_fetch_no_detail_returned",
+                            submission_id=str(lc_submission_id),
+                            slug=slug,
+                        )
+                        code_fetch_failed = True
                 except Exception as e:
-                    logger.warning("Failed to fetch code for submission %s: %s", raw["id"], e)
+                    logger.warning(
+                        "code_fetch_exception",
+                        submission_id=str(lc_submission_id),
+                        slug=slug,
+                        error=str(e),
+                    )
+                    code_fetch_failed = True
+
+            # Store the LeetCode submission ID as metadata so backfill can retry later
+            extras: dict = {}
+            if lc_submission_id:
+                extras["lc_submission_id"] = str(lc_submission_id)
+            if code_fetch_failed:
+                extras["code_fetch_pending"] = True
 
             submission = Submission(
                 user_id=user_id,
@@ -245,13 +331,25 @@ class SyncService:
                 language=raw.get("lang", "unknown"),
                 code_snapshot=code_snapshot,
                 verdict=verdict,
+                failing_test_cases=failing_test_cases,
+                error_message=error_message,
                 submitted_at=submitted_at,
                 analysed=False,
+                ai_analysis=extras if extras else None,
             )
             self.db.add(submission)
             await self.db.flush()
 
             await self.event_bus.emit(SUBMISSION_CREATED, "submission", submission.id, user_id)
+
+            # Trigger analysis worker in background
+            try:
+                from app.workers.analysis_worker import analyze_submission_task
+                analyze_submission_task.delay(str(submission.id))
+            except Exception as ae:
+                logger.warning(f"Could not queue analysis task via Celery: {ae}")
+
             count += 1
 
         return count
+

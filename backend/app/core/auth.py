@@ -149,7 +149,11 @@ async def validate_refresh_token(db: AsyncSession, token: str) -> UUID:
 
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_jti == payload["jti"]))
     stored_token = result.scalar_one_or_none()
-    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= datetime.now(UTC):
+    if stored_token is None or stored_token.revoked_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
+    
+    expires_at = stored_token.expires_at.replace(tzinfo=UTC) if stored_token.expires_at.tzinfo is None else stored_token.expires_at
+    if expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
 
     return UUID(payload["sub"])
@@ -166,7 +170,11 @@ async def rotate_refresh_token(db: AsyncSession, token: str) -> tuple[str, UUID]
 
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_jti == payload["jti"]))
     stored_token = result.scalar_one_or_none()
-    if stored_token is None or stored_token.revoked_at is not None or stored_token.expires_at <= datetime.now(UTC):
+    if stored_token is None or stored_token.revoked_at is not None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
+
+    expires_at = stored_token.expires_at.replace(tzinfo=UTC) if stored_token.expires_at.tzinfo is None else stored_token.expires_at
+    if expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token is not active")
 
     stored_token.revoked_at = datetime.now(UTC)

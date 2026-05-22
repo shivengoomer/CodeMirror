@@ -17,7 +17,11 @@ class LeetCodeCacheService:
         result = await self.db.execute(stmt)
         cached = result.scalar_one_or_none()
 
-        if cached and cached.fetched_at > datetime.now(timezone.utc) - timedelta(days=30):
+        fetched_at = cached.fetched_at if cached else None
+        if fetched_at and fetched_at.tzinfo is None:
+            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+
+        if cached and fetched_at > datetime.now(timezone.utc) - timedelta(days=30):
             return {
                 "title": cached.title,
                 "difficulty": cached.difficulty,
