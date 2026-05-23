@@ -157,7 +157,12 @@ export class ApiClient {
     );
   }
 
-  async syncExtension(payload: { submissions: any[] }): Promise<{ status: string }> {
+  async syncExtension(payload: {
+    submissions: any[];
+    leetcode_session?: string;
+    leetcode_csrf?: string;
+    leetcode_headers?: Record<string, string>;
+  }): Promise<{ status: string }> {
     return this.request<{ status: string }>(
       "POST",
       "/sync/extension",

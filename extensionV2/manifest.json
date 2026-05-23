@@ -1,0 +1,16 @@
+{
+    "manifest_version": 3,
+    "name": "LeetCode Session Sender",
+    "version": "1.0",
+    "permissions": [
+        "cookies",
+        "activeTab"
+    ],
+    "host_permissions": [
+        "https://leetcode.com/*",
+        "http://localhost:8000/*"
+    ],
+    "action": {
+        "default_popup": "popup.html"
+    }
+}

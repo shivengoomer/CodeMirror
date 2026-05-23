@@ -1,0 +1,83 @@
+
+start with get my cookie first to check if its right or not start with mylogin then my session_cookie then submiision then analyssisi full
+20:09
+Here is the complete step-by-step Postman testing workflow, from logging into the app to checking cookies, submitting code, and running the full AI analysis.
+
+Step 1: User Login (mylogin)
+First, authenticate with the local backend to get an access_token so you can make authenticated requests to the API.
+
+Method: POST
+URL: http://localhost:5000/api/v1/auth/login
+Headers:
+Content-Type: application/json
+Request Body (JSON):
+json
+{
+  "email": "user-email@example.com",
+  "password": "password123"
+}
+What to capture: Copy the "access_token" from the response. You will use it as a Bearer Token in the authorization headers for subsequent requests.
+Step 2: Validate LeetCode Session Cookie (session_cookie)
+Check if your LeetCode session cookie is valid and fetches details from LeetCode. This step does not save anything to the database, making it ideal for verifying credentials.
+
+Method: POST
+URL: http://localhost:5000/api/v1/test/checkCookie
+Headers:
+Content-Type: application/json
+Request Body (JSON):
+json
+{
+  "cookie": "YOUR_LEETCODE_SESSION_COOKIE_VALUE_HERE"
+}
+(To get this, open developer tools on leetcode.com, look at your Cookies for LEETCODE_SESSION and copy the value).
+What to expect: You should see your LeetCode username and your most recent submission details printed in the response.
+Step 3: Ingest a Submission (submission)
+Ingest a submission to the database. If this is a new submission, it automatically associates it with your user ID and prepares it for analysis.
+
+Method: POST
+URL: http://localhost:5000/api/v1/submissions
+Headers:
+Content-Type: application/json
+Authorization: Bearer YOUR_ACCESS_TOKEN_FROM_STEP_1
+Request Body (JSON):
+json
+{
+  "platform": "leetcode",
+  "problem_slug": "two-sum",
+  "problem_title": "Two Sum",
+  "language": "python3",
+  "code": "def twoSum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i):\n            if nums[i] + nums[j] == target:\n                return [i, j]",
+  "verdict": "wrong_answer",
+  "failing_test_cases": [
+    {"input": "[3,2,4], 6", "expected": "[1,2]", "got": "None"}
+  ],
+  "error_message": "AssertionError: expected [1,2] got None",
+  "runtime_ms": 48,
+  "timestamp": 1716306721000,
+  "leetcode_submission_id": "1234567890" 
+}
+What to capture: Copy the "submission_id" (UUID) from the successful response.
+Step 4: Step-by-Step Diagnostic & Analysis (analysis full)
+Verify the entire self-healing, metadata retrieval, and AI analysis execution pipeline for the submission you just created.
+
+Method: POST
+URL: http://localhost:5000/api/v1/test/analyze
+Headers:
+Content-Type: application/json
+Request Body (JSON):
+json
+{
+  "submission_id": "YOUR_SUBMISSION_UUID_FROM_STEP_3",
+  "leetcode_submission_id": "1234567890"
+}
+What to expect: A JSON report containing status updates for:
+Database lookup
+LeetCode session check
+Code snapshot retrieval (self-healing verification)
+AI analysis execution and saving.
+20:09
+yes
+20:10
+Awesome! You are all set to run these requests in Postman. Let me know if you run into any issues during testing or have any other questions. Have fun testing!
+
+20:10

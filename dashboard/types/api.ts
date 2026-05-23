@@ -67,6 +67,13 @@ export interface Submission {
   submitted_at: string;
   analysed: boolean;
   ai_analysis: AIAnalysis | null;
+  code_snapshot: string;
+  error_message: string | null;
+  failing_test_cases: Array<{
+    input: string;
+    expected: string;
+    got: string;
+  }>;
 }
 
 export interface RevisionItem {

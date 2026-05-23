@@ -47,7 +47,7 @@
           continue;
         }
 
-        if (typeof data?.status_code === "number" && data.status_code !== 10) {
+        if (typeof data?.status_code === "number") {
           window.postMessage(
             {
               type: MSG,
@@ -65,11 +65,6 @@
             },
             "*"
           );
-          return;
-        }
-
-        // Accepted or unexpected terminal response: stop polling.
-        if (typeof data?.status_code === "number") {
           return;
         }
 

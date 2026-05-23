@@ -1,8 +1,8 @@
-import { 
-  AnalyzeResponse, 
-  Notification, 
-  Pattern, 
-  RevisionSession, 
+import {
+  AnalyzeResponse,
+  Notification,
+  Pattern,
+  RevisionSession,
   UserProfile,
   SubmissionStats,
   AuthResponse,
@@ -24,7 +24,7 @@ export async function fetchWithAuth<T>(endpoint: string, options: RequestInit = 
   };
 
   const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
-  
+
   let data: any;
   const contentType = res.headers.get("content-type");
   if (contentType && contentType.includes("application/json")) {
@@ -68,10 +68,10 @@ export const api = {
   // Revision Queue
   listRevisionQueue: () => fetchWithAuth<RevisionItem[]>("/revision-queue"),
   getRevisionToday: () => fetchWithAuth<RevisionSession>("/revision-queue/today"),
-  completeRevision: (id: string, quality: number, last_verdict: string) => 
-    fetchWithAuth<RevisionItem>(`/revision-queue/${id}/complete`, { 
-      method: "POST", 
-      body: JSON.stringify({ quality, last_verdict }) 
+  completeRevision: (id: string, quality: number, last_verdict: string) =>
+    fetchWithAuth<RevisionItem>(`/revision-queue/${id}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ quality, last_verdict })
     }),
   deleteRevision: (id: string) => fetchWithAuth<void>(`/revision-queue/${id}`, { method: "DELETE" }),
 
@@ -79,9 +79,9 @@ export const api = {
   getNotifications: () => fetchWithAuth<Notification[]>("/notifications/unread"),
 
   // Chat
-  chat: (message: string, context: any) => fetchWithAuth<{ text: string }>("/chat", { 
-    method: "POST", 
-    body: JSON.stringify({ message, ...context }) 
+  chat: (message: string, context: any) => fetchWithAuth<{ text: string }>("/chat", {
+    method: "POST",
+    body: JSON.stringify({ message, ...context })
   }),
 
   // Sync
@@ -90,6 +90,7 @@ export const api = {
   triggerInitialSync: () => fetchWithAuth<any>("/sync/initial", { method: "POST" }),
   skipInitialSync: () => fetchWithAuth<any>("/sync/later", { method: "POST" }),
   getProblems: () => fetchWithAuth<{ problems: any[] }>("/sync/problems"),
+  backfillCode: () => fetchWithAuth<{ status: string; pending_count: number }>("/sync/backfill-code", { method: "POST" }),
 
   // Cache
   getCacheStats: () => fetchWithAuth<CacheStats>("/cache/stats"),
@@ -99,7 +100,7 @@ export const api = {
   health: () => fetchWithAuth<{ status: string }>("/health"),
 
   // ── V2 Endpoints (Prefixed with /api/v1) ──────────────────────
-  
+
   // Analysis (V2)
   getAnalysisV2: (id: string) => fetchWithAuth<any>(`/api/v1/analysis/${id}`),
   reanalyzeSubmission: (id: string) => fetchWithAuth<any>(`/api/v1/analysis/${id}/reanalyze`, { method: "POST" }),

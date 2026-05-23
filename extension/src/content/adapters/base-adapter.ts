@@ -64,7 +64,7 @@ export function normalizeVerdict(
   if (lower.includes("memorylimit") || lower === "mle") return "mle";
   if (lower.includes("runtimeerror") || lower === "re") return "runtime_error";
   if (lower.includes("compileerror") || lower === "ce") return "compile_error";
-  if (lower.includes("accepted") || lower === "ac") return null; // not a failure
+  if (lower.includes("accepted") || lower === "ac") return "accepted";
   return null;
 }
 

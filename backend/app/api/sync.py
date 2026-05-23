@@ -366,73 +366,117 @@ async def get_synced_problems(
     from app.models.lc_problem_cache import LCProblemCache
     from app.models.submission import Submission
     from app.models.enums import SubmissionVerdict
-    from sqlalchemy import case, func
+    from sqlalchemy import select
+
+    # 1. Get all unique problem slugs from Submissions table
+    subs_stmt = select(Submission).where(Submission.user_id == current_user.id).order_by(Submission.submitted_at.desc())
+    subs_res = await db.execute(subs_stmt)
+    all_subs = subs_res.scalars().all()
+
+    # Group submissions by problem slug
+    sub_groups = {}
+    for sub in all_subs:
+        slug = sub.problem_slug
+        sub_groups.setdefault(slug, []).append(sub)
+
+    # 2. Get problems from LCSubmissionSnapshot if any
+    snap_stmt = select(LCSubmissionSnapshot).where(LCSubmissionSnapshot.user_id == current_user.id).order_by(LCSubmissionSnapshot.last_synced.desc())
+    snap_res = await db.execute(snap_stmt)
+    snapshot = snap_res.scalar_one_or_none()
     
-    stmt = select(LCSubmissionSnapshot).where(LCSubmissionSnapshot.user_id == current_user.id).order_by(LCSubmissionSnapshot.last_synced.desc())
-    result = await db.execute(stmt)
-    snapshot = result.scalar_one_or_none()
-    
-    if not snapshot or not snapshot.raw_payload:
-        return {"problems": []}
-        
-    submissions = snapshot.raw_payload.get("submissions", [])
-    if isinstance(submissions, dict) and "submissions" in submissions:
-        submissions = submissions["submissions"]
-    
-    seen_slugs = [sub.get("titleSlug") for sub in submissions if sub.get("titleSlug")]
-    seen_slugs_set = set(seen_slugs)
-    
-    # 1. Fetch difficulty and tags from Problem Cache
+    snap_problems = []
+    if snapshot and snapshot.raw_payload:
+        raw_subs = snapshot.raw_payload.get("submissions", [])
+        if isinstance(raw_subs, dict) and "submissions" in raw_subs:
+            raw_subs = raw_subs["submissions"]
+        snap_problems = raw_subs
+
+    # 3. Collect all unique slugs from both sources
+    all_slugs = set(sub_groups.keys())
+    for sp in snap_problems:
+        slug = sp.get("titleSlug")
+        if slug:
+            all_slugs.add(slug)
+
+    # 4. Fetch difficulty and tags from LCProblemCache
     cache_map = {}
-    if seen_slugs:
+    if all_slugs:
         caches_result = await db.execute(
-            select(LCProblemCache).where(LCProblemCache.slug.in_(seen_slugs_set))
+            select(LCProblemCache).where(LCProblemCache.slug.in_(all_slugs))
         )
         for c in caches_result.scalars().all():
             cache_map[c.slug] = {
                 "difficulty": c.difficulty,
                 "tags": c.tags or []
             }
-            
-    # 2. Fetch total and failed attempts from Submission table
-    stats_map = {}
-    if seen_slugs:
-        stats_result = await db.execute(
-            select(
-                Submission.problem_slug,
-                func.count(Submission.id).label("total_attempts"),
-                func.sum(case((Submission.verdict != SubmissionVerdict.ACCEPTED, 1), else_=0)).label("failed_attempts")
-            )
-            .where(Submission.user_id == current_user.id)
-            .group_by(Submission.problem_slug)
-        )
-        for row in stats_result.all():
-            stats_map[row.problem_slug] = {
-                "total": row.total_attempts,
-                "failed": int(row.failed_attempts or 0)
-            }
-    
-    seen = set()
+
+    # 5. Build final problems list
     problems = []
-    for sub in submissions:
-        slug = sub.get("titleSlug")
-        if slug and slug not in seen:
-            seen.add(slug)
+    for slug in all_slugs:
+        # Determine problem info
+        prob_subs = sub_groups.get(slug, [])
+        prob_cache = cache_map.get(slug, {"difficulty": "Medium", "tags": []})
+        
+        # Default fallback values from snapshot or submission
+        title = slug.replace("-", " ").title()
+        timestamp = 0
+        status_display = "Accepted"
+        lang = "unknown"
+        
+        # If we have submissions in DB, use them as primary source of stats
+        if prob_subs:
+            latest_sub = prob_subs[0]
+            title = latest_sub.problem_title
+            timestamp = int(latest_sub.submitted_at.timestamp() * 1000)
+            lang = latest_sub.language
             
-            prob_cache = cache_map.get(slug, {"difficulty": "Medium", "tags": []})
-            prob_stats = stats_map.get(slug, {"total": 1, "failed": 0 if sub.get("statusDisplay") == "Accepted" else 1})
-            
-            problems.append({
-                "title": sub.get("title"),
-                "titleSlug": slug,
-                "timestamp": sub.get("timestamp"),
-                "statusDisplay": sub.get("statusDisplay"),
-                "lang": sub.get("lang"),
-                "difficulty": prob_cache["difficulty"],
-                "tags": prob_cache["tags"],
-                "totalAttempts": max(prob_stats["total"], 1),
-                "failedAttempts": prob_stats["failed"]
-            })
+            has_accepted = any(s.verdict == SubmissionVerdict.ACCEPTED for s in prob_subs)
+            if has_accepted:
+                status_display = "Accepted"
+            else:
+                # Map verdict to status display
+                v = latest_sub.verdict
+                if v == SubmissionVerdict.WRONG_ANSWER:
+                    status_display = "Wrong Answer"
+                elif v == SubmissionVerdict.TLE:
+                    status_display = "Time Limit Exceeded"
+                elif v == SubmissionVerdict.MLE:
+                    status_display = "Memory Limit Exceeded"
+                elif v == SubmissionVerdict.RUNTIME_ERROR:
+                    status_display = "Runtime Error"
+                elif v == SubmissionVerdict.COMPILE_ERROR:
+                    status_display = "Compile Error"
+                else:
+                    status_display = "Failed"
+                    
+            total_attempts = len(prob_subs)
+            failed_attempts = sum(1 for s in prob_subs if s.verdict != SubmissionVerdict.ACCEPTED)
+        else:
+            # Fallback to snapshot info if no database submissions exist for this slug
+            snap_match = next((sp for sp in snap_problems if sp.get("titleSlug") == slug), None)
+            if snap_match:
+                title = snap_match.get("title", title)
+                timestamp = snap_match.get("timestamp", timestamp)
+                status_display = snap_match.get("statusDisplay", status_display)
+                lang = snap_match.get("lang", lang)
+                
+            total_attempts = 1
+            failed_attempts = 0 if status_display == "Accepted" else 1
+
+        problems.append({
+            "title": title,
+            "titleSlug": slug,
+            "timestamp": timestamp,
+            "statusDisplay": status_display,
+            "lang": lang,
+            "difficulty": prob_cache["difficulty"],
+            "tags": prob_cache["tags"],
+            "totalAttempts": max(total_attempts, 1),
+            "failedAttempts": failed_attempts
+        })
+
+    # Sort problems by timestamp descending
+    problems.sort(key=lambda x: x["timestamp"], reverse=True)
     return {"problems": problems}
 
 

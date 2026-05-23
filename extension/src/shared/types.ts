@@ -2,6 +2,7 @@
 export type Platform = "leetcode" | "gfg" | "hackerrank";
 
 export type Verdict =
+  | "accepted"
   | "wrong_answer"
   | "tle"
   | "mle"

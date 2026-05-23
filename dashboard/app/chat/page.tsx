@@ -16,6 +16,17 @@ interface Message {
 export default function ChatView() {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const problemSlug = params.get("problem");
+      if (problemSlug) {
+        setInput(`I want to discuss my mistakes and improve my solution on LeetCode problem: "${problemSlug}". What patterns or edge cases should I look out for?`);
+      }
+    }
+  }, []);
+
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "user",
@@ -52,7 +63,7 @@ export default function ChatView() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto h-[calc(100vh-160px)] flex flex-col relative">
+    <div className="w-full h-[calc(100vh-160px)] flex flex-col relative">
       {/* Pinned Context Bar */}
       <motion.div 
         initial={{ y: -20, opacity: 0 }}

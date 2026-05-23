@@ -6,7 +6,7 @@ import {
   setAuthTokens,
   setUserProfile,
 } from "../shared/storage";
-import type { ExtensionMessage, MessageResponse } from "../shared/types";
+import type { ExtensionMessage, MessageResponse, UnifiedSubmission } from "../shared/types";
 
 let leetcodeCookieDebugLogged = false;
 
@@ -41,14 +41,37 @@ async function handleMessage(msg: ExtensionMessage): Promise<MessageResponse> {
       return { success: true };
     case "SYNC_SUBMISSIONS":
       return handleSyncSubmissions((msg as any).payload);
+    case "SUBMISSION_CAPTURED":
+      return handleSubmissionCaptured(msg.data);
     default:
       return { success: false, error: "Unsupported message type" };
   }
 }
 
+async function handleSubmissionCaptured(submission: UnifiedSubmission): Promise<MessageResponse> {
+  try {
+    if (submission.platform === "leetcode") {
+      const cookies = await getLeetCodeCookies();
+      submission.leetcode_session = cookies.session ?? undefined;
+      submission.leetcode_csrf = cookies.csrf ?? undefined;
+      submission.leetcode_headers = cookies.headers;
+    }
+    const res = await apiClient.submitFailure(submission);
+    return { success: true, data: res };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
 async function handleSyncSubmissions(submissions: any[]): Promise<MessageResponse> {
   try {
-    const res = await apiClient.syncExtension({ submissions });
+    const cookies = await getLeetCodeCookies();
+    const res = await apiClient.syncExtension({
+      submissions,
+      leetcode_session: cookies.session ?? undefined,
+      leetcode_csrf: cookies.csrf ?? undefined,
+      leetcode_headers: cookies.headers,
+    });
     return { success: true, data: res };
   } catch (err) {
     return { success: false, error: String(err) };
